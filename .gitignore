@@ -1,1 +1,3 @@
-credentials.json"credentials_escaped_string.txt" 
+credentials.json 
+credentials_escaped_string.txt 
+*.json 
