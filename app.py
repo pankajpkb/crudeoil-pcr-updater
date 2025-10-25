@@ -12,11 +12,8 @@ import pytz
 
 app = Flask(__name__)
 
-# Global variable to track last update time
-last_update_time = None
-
 def pcr_job():
-    global last_update_time
+    last_update_minute = -1  # Track last update minute
     
     while True:
         try:
@@ -25,20 +22,19 @@ def pcr_job():
             current_time = datetime.now(ist)
             current_hour = current_time.hour
             current_minute = current_time.minute
+            current_second = current_time.second
             
             # Check if within 9 AM to 11:30 PM IST
             if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
-                if last_update_time != "outside_hours":
+                if last_update_minute != -2:
                     print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
-                    last_update_time = "outside_hours"
-                time.sleep(60)  # Check every minute
+                    last_update_minute = -2
+                time.sleep(30)  # Check every 30 seconds
                 continue
             
-            # Check if we should update (every 1 minute)
-            current_timestamp = f"{current_hour}:{current_minute:02d}"
-            if last_update_time == current_timestamp:
-                # Already updated this minute, wait for next minute
-                time.sleep(30)  # Check every 30 seconds
+            # Update only at the start of each minute (second 0-5)
+            if current_second > 5 or current_minute == last_update_minute:
+                time.sleep(10)  # Check every 10 seconds
                 continue
             
             print(f"🔄 Updating PCR data at {current_hour}:{current_minute:02d} IST...")
@@ -82,20 +78,22 @@ def pcr_job():
             sheet.append_row(new_row)
             print(f"✅ Updated: {timestamp}")
             
-            # Update last update time
-            last_update_time = current_timestamp
+            # Update last update minute
+            last_update_minute = current_minute
+            
+            # Wait until next minute
+            time.sleep(50)  # Wait 50 seconds before next check
             
         except Exception as e:
             print(f"❌ Error: {e}")
-        
-        # Wait before next check
-        time.sleep(30)  # Check every 30 seconds
+            time.sleep(30)  # Wait 30 seconds on error
 
 @app.route('/')
 def home():
-    return "PCR Updater Running - 9 AM to 11:30 PM IST (Every 1 Minute)!"
+    return "PCR Updater Running - 9 AM to 11:30 PM IST (Exactly Every 1 Minute)!"
 
+# Start only one thread
 Thread(target=pcr_job, daemon=True).start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, threaded=False)  # Single thread
