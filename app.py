@@ -1,67 +1,35 @@
-from flask import Flask
-import gspread
-import json
-import os
-from datetime import datetime
-import pytz
-
-app = Flask(__name__)
-
-@app.route('/test')
-def test_sheets():
+@app.route('/find')
+def find_data():
     try:
-        print("🧪 TESTING GOOGLE SHEETS CONNECTION...")
-        
-        # IST timezone
-        ist = pytz.timezone('Asia/Kolkata')
-        current_time = datetime.now(ist)
-        timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")
-        
-        print("📊 Connecting to Google Sheets...")
+        print("🔍 FINDING WHERE DATA IS GOING...")
         
         # Google Sheets connection
         creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
         gc = gspread.service_account_from_dict(creds_json)
         
-        print("✅ Google Auth Successful!")
+        # List all available spreadsheets
+        print("📋 All your Google Sheets:")
+        for spreadsheet in gc.openall():
+            print(f"   - {spreadsheet.title} (ID: {spreadsheet.id})")
         
-        # Open sheet
-        sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
-        print("✅ Sheet Accessed Successfully!")
+        # Open our specific sheet
+        sheet = gc.open("CrudeOil_PCR_Live_Data")
+        print(f"✅ Opened: {sheet.title}")
         
-        # Get last row to verify access
-        last_row = sheet.row_count
-        print(f"📈 Sheet has {last_row} rows")
+        # List all worksheets
+        print("📊 Worksheets in this sheet:")
+        for worksheet in sheet.worksheets():
+            print(f"   - {worksheet.title} (Rows: {worksheet.row_count})")
+            
+            # Show first 5 rows
+            if worksheet.title == "PCR_Data_Live":
+                data = worksheet.get_all_values()
+                print(f"📝 First 5 rows of {worksheet.title}:")
+                for i, row in enumerate(data[:5]):
+                    print(f"   Row {i+1}: {row}")
         
-        # Add test data
-        test_row = [
-            timestamp,
-            "TEST_PUT",
-            "0", 
-            "TEST_CALL",
-            "0",
-            "Test Update",
-            "1.00",
-            "0.00", 
-            "Test Trend",
-            "This is a test entry",
-            "1000", "2000", "0.50",
-            "5000", "10.00", "0.20%"
-        ]
-        
-        print(f"📝 Adding test row: {timestamp}")
-        sheet.append_row(test_row)
-        print("✅ TEST DATA ADDED SUCCESSFULLY!")
-        
-        return f"✅ TEST SUCCESS! Check sheet for test data at {timestamp}"
+        return "Check logs for sheet details"
         
     except Exception as e:
-        print(f"❌ TEST ERROR: {e}")
-        return f"❌ TEST FAILED: {e}"
-
-@app.route('/')
-def home():
-    return "PCR Updater - Visit /test to test Google Sheets"
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+        print(f"❌ ERROR: {e}")
+        return f"Error: {e}"
