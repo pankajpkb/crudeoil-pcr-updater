@@ -13,7 +13,8 @@ import pytz
 app = Flask(__name__)
 
 def pcr_job():
-    last_update_minute = -1  # Track last update minute
+    print("🎯 PCR Background Job STARTED!")
+    last_update_minute = -1
     
     while True:
         try:
@@ -24,17 +25,21 @@ def pcr_job():
             current_minute = current_time.minute
             current_second = current_time.second
             
-            # Check if within 9 AM to 11:30 PM IST
-            if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
-                if last_update_minute != -2:
-                    print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
-                    last_update_minute = -2
-                time.sleep(30)  # Check every 30 seconds
-                continue
+            print(f"⏰ Current time: {current_hour}:{current_minute:02d}:{current_second:02d} IST")
             
-            # Update only at the start of each minute (second 0-5)
-            if current_second > 5 or current_minute == last_update_minute:
-                time.sleep(10)  # Check every 10 seconds
+            # TEMPORARY: 24/7 testing - Remove time restriction
+            # Check if within 9 AM to 11:30 PM IST
+            # if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
+            #     if last_update_minute != -2:
+            #         print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
+            #         last_update_minute = -2
+            #     time.sleep(30)
+            #     continue
+            
+            # Update only at the start of each minute (second 0-10)
+            if current_second > 10 or current_minute == last_update_minute:
+                print(f"⏳ Waiting for next minute... (Current second: {current_second})")
+                time.sleep(10)
                 continue
             
             print(f"🔄 Updating PCR data at {current_hour}:{current_minute:02d} IST...")
@@ -45,6 +50,7 @@ def pcr_job():
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
             
+            print("🌐 Fetching data from niftyinvest...")
             response = requests.get(pcr_url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.text, "html.parser")
             all_text = soup.get_text()
@@ -57,9 +63,10 @@ def pcr_job():
             call_oi = int(call_match.group(1).replace(',', '')) if call_match else 0
             intraday_pcr = pcr_match.group(1) if pcr_match else "0"
             
-            print(f"✅ Data - Put: {put_oi}, Call: {call_oi}, PCR: {intraday_pcr}")
+            print(f"✅ Data extracted - Put: {put_oi}, Call: {call_oi}, PCR: {intraday_pcr}")
             
             # Google Sheets update
+            print("📊 Connecting to Google Sheets...")
             creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
             gc = gspread.service_account_from_dict(creds_json)
             sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
@@ -75,25 +82,26 @@ def pcr_job():
                 "24,416", "27,588", "0.89", "5457", "20.00", "0.37%"
             ]
             
+            print(f"📝 Adding row to sheet: {new_row[0]}")
             sheet.append_row(new_row)
-            print(f"✅ Updated: {timestamp}")
+            print(f"✅ Data updated successfully: {timestamp}")
             
-            # Update last update minute
             last_update_minute = current_minute
-            
-            # Wait until next minute
-            time.sleep(50)  # Wait 50 seconds before next check
+            print("💤 Waiting for next update...")
+            time.sleep(50)  # Wait 50 seconds
             
         except Exception as e:
-            print(f"❌ Error: {e}")
-            time.sleep(30)  # Wait 30 seconds on error
+            print(f"❌ ERROR: {e}")
+            time.sleep(30)
+
+# Start the background job when app starts
+print("🚀 Starting PCR Background Job...")
+Thread(target=pcr_job, daemon=True).start()
 
 @app.route('/')
 def home():
-    return "PCR Updater Running - 9 AM to 11:30 PM IST (Exactly Every 1 Minute)!"
-
-# Start only one thread
-Thread(target=pcr_job, daemon=True).start()
+    return "PCR Updater Running - 24/7 TEST MODE! Check logs for updates."
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, threaded=False)  # Single thread
+    print("🎉 Flask App Starting...")
+    app.run(host='0.0.0.0', port=5000)
