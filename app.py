@@ -8,24 +8,37 @@ import os
 from datetime import datetime
 import time
 from threading import Thread
-import pytz  # NEW LINE ADD
+import pytz
 
 app = Flask(__name__)
 
+# Global variable to track last update time
+last_update_time = None
+
 def pcr_job():
+    global last_update_time
+    
     while True:
         try:
-            # FIXED TIMEZONE CODE
-            ist = pytz.timezone('Asia/Kolkata')  # NEW LINE
-            current_time = datetime.now(ist)     # CHANGED LINE
-            
+            # IST timezone
+            ist = pytz.timezone('Asia/Kolkata')
+            current_time = datetime.now(ist)
             current_hour = current_time.hour
             current_minute = current_time.minute
             
-            # Only run between 9 AM to 11:30 PM IST
+            # Check if within 9 AM to 11:30 PM IST
             if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
-                print(f"⏸️ Outside hours: {current_hour}:{current_minute:02d} IST")
-                time.sleep(60)
+                if last_update_time != "outside_hours":
+                    print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
+                    last_update_time = "outside_hours"
+                time.sleep(60)  # Check every minute
+                continue
+            
+            # Check if we should update (every 1 minute)
+            current_timestamp = f"{current_hour}:{current_minute:02d}"
+            if last_update_time == current_timestamp:
+                # Already updated this minute, wait for next minute
+                time.sleep(30)  # Check every 30 seconds
                 continue
             
             print(f"🔄 Updating PCR data at {current_hour}:{current_minute:02d} IST...")
@@ -55,9 +68,7 @@ def pcr_job():
             gc = gspread.service_account_from_dict(creds_json)
             sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
             
-            # FIXED TIMESTAMP
-            timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")  # CHANGED LINE
-            
+            timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
             
@@ -71,14 +82,18 @@ def pcr_job():
             sheet.append_row(new_row)
             print(f"✅ Updated: {timestamp}")
             
+            # Update last update time
+            last_update_time = current_timestamp
+            
         except Exception as e:
             print(f"❌ Error: {e}")
         
-        time.sleep(60)
+        # Wait before next check
+        time.sleep(30)  # Check every 30 seconds
 
 @app.route('/')
 def home():
-    return "PCR Updater Running - 9 AM to 11:30 PM IST!"
+    return "PCR Updater Running - 9 AM to 11:30 PM IST (Every 1 Minute)!"
 
 Thread(target=pcr_job, daemon=True).start()
 
