@@ -8,24 +8,27 @@ import os
 from datetime import datetime
 import time
 from threading import Thread
+import pytz  # NEW LINE ADD
 
 app = Flask(__name__)
 
 def pcr_job():
     while True:
         try:
-            current_time = datetime.now()
+            # FIXED TIMEZONE CODE
+            ist = pytz.timezone('Asia/Kolkata')  # NEW LINE
+            current_time = datetime.now(ist)     # CHANGED LINE
+            
+            current_hour = current_time.hour
+            current_minute = current_time.minute
             
             # Only run between 9 AM to 11:30 PM IST
-            ist_hour = (current_time.hour + 5) % 24 + (1 if current_time.minute >= 30 else 0)
-            ist_minute = (current_time.minute + 30) % 60
-            
-            if not (9 <= ist_hour < 23 or (ist_hour == 23 and ist_minute <= 30)):
-                print(f"⏸️ Outside hours: {ist_hour}:{ist_minute:02d} IST")
+            if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
+                print(f"⏸️ Outside hours: {current_hour}:{current_minute:02d} IST")
                 time.sleep(60)
                 continue
             
-            print(f"🔄 Updating PCR data at {ist_hour}:{ist_minute:02d} IST...")
+            print(f"🔄 Updating PCR data at {current_hour}:{current_minute:02d} IST...")
             
             # Your data fetching code
             pcr_url = "https://niftyinvest.com/put-call-ratio/CRUDEOILM"
@@ -52,7 +55,9 @@ def pcr_job():
             gc = gspread.service_account_from_dict(creds_json)
             sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
             
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
+            # FIXED TIMESTAMP
+            timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")  # CHANGED LINE
+            
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
             
