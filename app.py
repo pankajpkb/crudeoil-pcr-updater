@@ -12,8 +12,12 @@ import pytz
 
 app = Flask(__name__)
 
+# Global variable to track last update
+last_update_time = None
+
 def pcr_background_job():
     print("🚀 PCR BACKGROUND JOB STARTED!")
+    global last_update_time
     
     while True:
         try:
@@ -27,7 +31,9 @@ def pcr_background_job():
             
             # Only run between 9 AM to 11:30 PM IST
             if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
-                print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
+                if last_update_time != "outside_hours":
+                    print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
+                    last_update_time = "outside_hours"
                 time.sleep(60)
                 continue
             
@@ -90,6 +96,7 @@ def pcr_background_job():
                 sheet.update_cell(empty_row, col, value)
             
             print(f"✅ AUTO-UPDATED SUCCESSFULLY at row {empty_row}!")
+            last_update_time = f"{current_hour}:{current_minute:02d}"
             
         except Exception as e:
             print(f"❌ BACKGROUND JOB ERROR: {e}")
@@ -98,6 +105,19 @@ def pcr_background_job():
         print("💤 Waiting 60 seconds for next update...")
         time.sleep(60)
 
+# Keep-alive function to prevent idle timeout
+def keep_alive_job():
+    print("❤️ KEEP-ALIVE JOB STARTED!")
+    while True:
+        try:
+            # Make a request to our own service every 10 minutes
+            requests.get("https://crudeoil-pcr-updater.onrender.com/", timeout=5)
+            print("❤️ Keep-alive ping sent")
+        except Exception as e:
+            print(f"❤️ Keep-alive error: {e}")
+        
+        time.sleep(600)  # Wait 10 minutes
+
 @app.route('/')
 def home():
     return "PCR Auto-Updater Running - 9 AM to 11:30 PM IST"
@@ -105,7 +125,6 @@ def home():
 @app.route('/update')
 def manual_update():
     try:
-        # Same code as background job but for manual trigger
         print("🎯 MANUAL UPDATE TRIGGERED!")
         
         ist = pytz.timezone('Asia/Kolkata')
@@ -160,11 +179,15 @@ def manual_update():
     except Exception as e:
         return f"❌ Error: {e}"
 
-# Start background job when app starts
+# Start both jobs when app starts
 print("🎉 Starting PCR Auto-Updater...")
 background_thread = threading.Thread(target=pcr_background_job, daemon=True)
 background_thread.start()
-print("✅ Background job started successfully!")
+
+keep_alive_thread = threading.Thread(target=keep_alive_job, daemon=True)
+keep_alive_thread.start()
+
+print("✅ Both jobs started successfully!")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
