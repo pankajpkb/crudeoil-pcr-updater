@@ -14,13 +14,19 @@ app = Flask(__name__)
 
 # Global variable to track last update minute
 last_update_minute = -1
+update_in_progress = False  # 🔒 NEW: Prevent duplicate updates
 
 def pcr_background_job():
     print("🚀 PCR BACKGROUND JOB STARTED!")
-    global last_update_minute
+    global last_update_minute, update_in_progress
     
     while True:
         try:
+            # 🔒 Check if update already in progress
+            if update_in_progress:
+                time.sleep(5)
+                continue
+                
             # IST timezone
             ist = pytz.timezone('Asia/Kolkata')
             current_time = datetime.now(ist)
@@ -44,6 +50,9 @@ def pcr_background_job():
                     sleep_time = 5
                 time.sleep(sleep_time)
                 continue
+            
+            # 🔒 Set update flag to prevent duplicates
+            update_in_progress = True
             
             print(f"🔄 Auto-updating PCR data at {current_hour}:{current_minute:02d}:{current_second:02d} IST...")
             
@@ -199,6 +208,9 @@ def pcr_background_job():
             # Update last update minute
             last_update_minute = current_minute
             
+            # 🔒 Reset update flag
+            update_in_progress = False
+            
             # Wait until next minute starts
             sleep_time = 60 - datetime.now(ist).second
             if sleep_time > 55:  # Safety check
@@ -208,6 +220,8 @@ def pcr_background_job():
             
         except Exception as e:
             print(f"❌ BACKGROUND JOB ERROR: {e}")
+            # 🔒 Reset update flag on error too
+            update_in_progress = False
             time.sleep(30)
 
 # Keep-alive function to prevent idle timeout
@@ -229,7 +243,13 @@ def home():
 
 @app.route('/update')
 def manual_update():
+    global update_in_progress
     try:
+        # 🔒 Check if update already in progress
+        if update_in_progress:
+            return "⚠️ Update already in progress, please wait..."
+            
+        update_in_progress = True
         print("🎯 MANUAL UPDATE TRIGGERED!")
         
         ist = pytz.timezone('Asia/Kolkata')
@@ -334,9 +354,11 @@ def manual_update():
         for col, value in enumerate(new_row, start=1):
             sheet.update_cell(empty_row, col, value)
         
+        update_in_progress = False
         return f"✅ Manual Update Successful at row {empty_row}: {timestamp}"
         
     except Exception as e:
+        update_in_progress = False
         return f"❌ Error: {e}"
 
 # Start both jobs when app starts
@@ -349,5 +371,9 @@ keep_alive_thread.start()
 
 print("✅ Both jobs started successfully!")
 
+# 🔒 Production WSGI Server Configuration
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Use environment port or default to 5000
+    port = int(os.environ.get('PORT', 5000))
+    # Run with production settings - no auto-reload
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
