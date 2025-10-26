@@ -7,268 +7,280 @@ import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import threading
+import os
+import json
+import logging
 
-# === PCR URL and Headers ===
-pcr_url = "https://niftyinvest.com/put-call-ratio/CRUDEOILM"
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
+# === CONFIGURATION ===
+class Config:
+    PCR_URL = "https://niftyinvest.com/put-call-ratio/CRUDEOILM"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    UPDATE_INTERVAL = 60  # seconds
+    
+    # Google Sheets Configuration
+    CREDENTIALS_FILE = "data/credentials.json"
+    SHEET_NAME = "CrudeOil_PCR_Live_Data"
+    WORKSHEET_NAME = "PCR_Data_Live"
 
-# === Store last values for PCR calculations ===
-last_values = {"put_oi": None, "call_oi": None, "pcr": None}
+# === LOGGING SETUP ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('pcr_tracker.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# === Google Sheets Setup ===
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("C:\\Users\\Pankaj\\Desktop\\python\\credentials.json", scope)
-client = gspread.authorize(creds)
-sheet_pcr = client.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
+class PCRTracker:
+    def __init__(self):
+        self.last_values = {"put_oi": None, "call_oi": None, "pcr": None}
+        self.setup_google_sheets()
+        
+    def setup_google_sheets(self):
+        """Setup Google Sheets connection"""
+        try:
+            if not os.path.exists(Config.CREDENTIALS_FILE):
+                raise FileNotFoundError(f"Credentials file not found: {Config.CREDENTIALS_FILE}")
+                
+            scope = ["https://spreadsheets.google.com/feeds", 
+                    "https://www.googleapis.com/auth/drive"]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(
+                Config.CREDENTIALS_FILE, scope)
+            self.client = gspread.authorize(creds)
+            self.sheet = self.client.open(Config.SHEET_NAME).worksheet(Config.WORKSHEET_NAME)
+            logger.info("✅ Google Sheets connection established")
+        except Exception as e:
+            logger.error(f"❌ Google Sheets setup failed: {e}")
+            raise
 
-# === Function to fetch PCR data ===
-def fetch_pcr_data():
-    try:
-        response = requests.get(pcr_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        
-        put_oi = 0
-        call_oi = 0
-        intraday_pcr = "0"
-        
-        # === NEW VARIABLES FOR ADDITIONAL DATA ===
-        total_put_oi = 0
-        total_call_oi = 0
-        overall_pcr = "0"
-        crudeoil_price = "0"
-        crudeoil_change = "0"
-        crudeoil_percent_change = "0"
-        
-        # === IMPROVED DATA EXTRACTION LOGIC ===
-        all_text = soup.get_text()
-        
-        # Improved regex patterns for existing data
-        put_pattern = r'Put OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)'
-        call_pattern = r'Call OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)' 
-        pcr_pattern = r'Intraday PCR\s*([+-]?\d+\.\d+)'
-        
-        # === NEW REGEX PATTERNS FOR ADDITIONAL DATA ===
-        total_put_oi_pattern = r'Put OI\s*(\d{1,3}(?:,\d{3})*)'
-        total_call_oi_pattern = r'Call OI\s*(\d{1,3}(?:,\d{3})*)'
-        overall_pcr_pattern = r'PCR\s*(\d+\.\d+)'
-        
-        # Extract existing data
-        put_match = re.search(put_pattern, all_text)
-        call_match = re.search(call_pattern, all_text)
-        pcr_match = re.search(pcr_pattern, all_text)
-        
-        # Extract new data
-        total_put_match = re.search(total_put_oi_pattern, all_text)
-        total_call_match = re.search(total_call_oi_pattern, all_text)
-        overall_pcr_match = re.search(overall_pcr_pattern, all_text)
-        
-        if put_match:
-            put_str = put_match.group(1)
-            put_oi = int(put_str.replace(',', ''))
-            print(f"✅ Put OI Chg: {put_str} → {put_oi}")
-        
-        if call_match:
-            call_str = call_match.group(1)
-            # Check if the extracted string has a negative sign
-            if call_str.startswith('-'):
-                call_oi = -int(call_str.replace(',', '').lstrip('-'))
-            else:
-                call_oi = int(call_str.replace(',', ''))
-            print(f"✅ Call OI Chg: {call_str} → {call_oi}")
-        
-        if pcr_match:
-            intraday_pcr = pcr_match.group(1)
-            print(f"✅ Intraday PCR: {intraday_pcr}")
-        
-        # Extract new data points
-        if total_put_match:
-            total_put_oi = int(total_put_match.group(1).replace(',', ''))
-            print(f"✅ Total Put OI: {total_put_oi:,}")
-        
-        if total_call_match:
-            total_call_oi = int(total_call_match.group(1).replace(',', ''))
-            print(f"✅ Total Call OI: {total_call_oi:,}")
-        
-        if overall_pcr_match:
-            overall_pcr = overall_pcr_match.group(1)
-            print(f"✅ Overall PCR: {overall_pcr}")
-        
-        # === PRECISE PRICE EXTRACTION - FIXED FOR 5445 ===
-        print("🔍 Searching for CrudeOil price data...")
-        
-        # Method 1: Look for 4-digit numbers (like 5445, 5452 etc.)
-        four_digit_numbers = re.findall(r'\b(\d{4})\b', all_text)
-        if four_digit_numbers:
-            # Filter numbers in typical crude oil futures range (5000-6000)
-            valid_prices = [p for p in four_digit_numbers if 5000 <= int(p) <= 6000]
-            if valid_prices:
-                crudeoil_price = valid_prices[0]
-                print(f"🎯 CrudeOil Price (4-digit): {crudeoil_price}")
-        
-        # Method 2: Look for price in the specific context pattern we saw earlier
-        context_price = re.search(r'CRUDEOILM.*?Crude Oil Mini.*?(\d{4})', all_text, re.DOTALL)
-        if context_price:
-            crudeoil_price = context_price.group(1)
-            print(f"🎯 CrudeOil Price (Context): {crudeoil_price}")
-        
-        # Method 3: Look for price with decimal (like 5445.50)
-        decimal_price = re.search(r'(\d{4}\.\d+)', all_text)
-        if decimal_price:
-            crudeoil_price = decimal_price.group(1).split('.')[0]  # Take only integer part
-            print(f"🎯 CrudeOil Price (Decimal): {crudeoil_price}")
-        
-        # Method 4: Get the first 4-digit number that appears after CRUDEOILM
-        precise_match = re.search(r'CRUDEOILM[^\d]*(\d{4})', all_text)
-        if precise_match:
-            crudeoil_price = precise_match.group(1)
-            print(f"🎯 CrudeOil Price (After CRUDEOILM): {crudeoil_price}")
-        
-        # Method 5: If we have multiple 4-digit numbers, take the one that changes (most likely real price)
-        if len(four_digit_numbers) > 1:
-            # Remove any static numbers (like year 2024, 2025 etc.)
-            current_year = str(datetime.now().year)
-            dynamic_numbers = [p for p in four_digit_numbers if p not in [current_year, '2024', '2025']]
-            if dynamic_numbers:
-                crudeoil_price = dynamic_numbers[0]
-                print(f"🎯 CrudeOil Price (Dynamic): {crudeoil_price}")
-        
-        # Try to find change data
-        if crudeoil_price != "0":
-            # Look for change pattern near the price
-            change_pattern = re.search(r'(\d{4})\s*\(([+-]?\d+\.\d+)\s*\(([+-]?\d+\.\d+)%\)', all_text)
-            if change_pattern:
-                crudeoil_change = change_pattern.group(2)
-                crudeoil_percent_change = change_pattern.group(3)
-                print(f"✅ CrudeOil Change Data: {crudeoil_change}, {crudeoil_percent_change}%")
-            else:
-                # Alternative change pattern
-                alt_change = re.search(r'([+-]?\d+\.\d+)\s*\(([+-]?\d+\.\d+)%\)', all_text)
-                if alt_change:
-                    crudeoil_change = alt_change.group(1)
-                    crudeoil_percent_change = alt_change.group(2)
-                    print(f"✅ CrudeOil Change Data (Alt): {crudeoil_change}, {crudeoil_percent_change}%")
-        
-        # === REMOVED AUTOMATIC NEGATIVE CORRECTION FOR CALL OI ===
-        # Now we trust the actual sign from the website
-        
-        # Only check for PCR correction if needed
-        if intraday_pcr == "0" or float(intraday_pcr) >= 0:
-            print("🔄 Checking PCR correction...")
-            pcr_context = re.search(r'Intraday PCR[^\d]*([+-]?\d+\.\d+)', all_text)
-            if pcr_context and '-' in pcr_context.group(0):
-                intraday_pcr = "-" + intraday_pcr.lstrip('-')
-                print(f"Manual correction - Intraday PCR: {intraday_pcr}")
+    def fetch_pcr_data(self):
+        """Fetch PCR data from website with improved error handling"""
+        try:
+            response = requests.get(Config.PCR_URL, headers=Config.HEADERS, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            all_text = soup.get_text()
+            
+            # Extract data using multiple methods
+            data = self.extract_pcr_data(all_text)
+            data.update(self.extract_price_data(all_text))
+            
+            return self.process_data(data)
+            
+        except requests.RequestException as e:
+            logger.error(f"❌ Network error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Data extraction error: {e}")
+            return None
 
-        # Final validation for put_oi
-        if put_oi == 0:
-            alt_put_match = re.search(r'Put.*?Change.*?OI.*?([+-]?\d{1,3}(?:,\d{3})*)', all_text, re.IGNORECASE)
-            if alt_put_match:
-                put_oi_str = alt_put_match.group(1)
-                if put_oi_str.startswith('-'):
-                    put_oi = -int(put_oi_str.replace(',', '').lstrip('-'))
-                else:
-                    put_oi = int(put_oi_str.replace(',', ''))
-                print(f"🔄 Alternative Put OI: {put_oi}")
-
-        # === DATA PROCESSING ===
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
-        intraday_pcr_float = float(intraday_pcr)
-        trend = "Bearish Trend" if intraday_pcr_float <= 0.8 else "Bullish Trend" if intraday_pcr_float >= 1.2 else "Neutral Trend"
-
-        abs_put = abs(put_oi)
-        abs_call = abs(call_oi)
-        if abs_call > abs_put:
-            change_percent = f"Call Change OI is higher by {((abs_call - abs_put) / abs_put * 100 if abs_put > 0 else 0):.2f}%"
-        elif abs_put > abs_call:
-            change_percent = f"Put Change OI is higher by {((abs_put - abs_call) / abs_call * 100 if abs_call > 0 else 0):.2f}%"
-        else:
-            change_percent = "Both are equal (0%)"
-
-        # Calculate changes
-        put_change = put_oi - last_values["put_oi"] if last_values["put_oi"] is not None else 0
-        call_change = call_oi - last_values["call_oi"] if last_values["call_oi"] is not None else 0
-        pcr_change = intraday_pcr_float - last_values["pcr"] if last_values["pcr"] is not None else 0
-
-        # Update last values
-        last_values["put_oi"] = put_oi
-        last_values["call_oi"] = call_oi
-        last_values["pcr"] = intraday_pcr_float
-
-        # Create DataFrame with ALL data
-        new_data = {
-            "Timestamp": [timestamp],
-            "Intraday Put Change OI": [f"{put_oi:,}"],
-            "Put Change": [f"{put_change:,}"],
-            "Intraday Call Change OI": [f"{call_oi:,}"],
-            "Call Change": [f"{call_change:,}"],
-            "Change %": [change_percent],
-            "Intraday PCR": [intraday_pcr],
-            "Pcr Change": [f"{pcr_change:.2f}"],
-            "Trend": [trend],
-            "Observation": [f"PCR {intraday_pcr} indicates {trend.lower()}. Market sentiment shifting towards {trend.lower()}."],
-            # === NEW DATA COLUMNS ===
-            "Total Put OI": [f"{total_put_oi:,}"],
-            "Total Call OI": [f"{total_call_oi:,}"],
-            "Overall PCR": [overall_pcr],
-            "CrudeOil Price": [crudeoil_price],
-            "CrudeOil Change": [crudeoil_change],
-            "CrudeOil % Change": [f"{crudeoil_percent_change}%"]
+    def extract_pcr_data(self, text):
+        """Extract PCR related data"""
+        data = {
+            'put_oi': 0,
+            'call_oi': 0, 
+            'intraday_pcr': "0",
+            'total_put_oi': 0,
+            'total_call_oi': 0,
+            'overall_pcr': "0"
         }
         
-        print(f"🎯 FINAL DATA: Put OI: {put_oi:,} | Call OI: {call_oi:,} | PCR: {intraday_pcr} | Trend: {trend}")
-        print(f"📈 NEW DATA: Total Put OI: {total_put_oi:,} | Total Call OI: {total_call_oi:,} | Overall PCR: {overall_pcr}")
-        print(f"💰 PRICE: CrudeOil: {crudeoil_price} | Change: {crudeoil_change} | % Change: {crudeoil_percent_change}%")
+        # Multiple patterns for PCR
+        pcr_patterns = [
+            r'PCR[^\d]*([+-]?\d+\.\d+)',
+            r'Put.*?Call.*?Ratio[^\d]*([+-]?\d+\.\d+)',
+            r'Intraday PCR[^\d]*([+-]?\d+\.\d+)',
+        ]
         
-        return pd.DataFrame(new_data)
+        for pattern in pcr_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                data['intraday_pcr'] = match.group(1)
+                logger.info(f"✅ PCR found: {data['intraday_pcr']}")
+                break
         
-    except Exception as e:
-        print(f"❌ Error in fetch_pcr_data: {e}")
-        return None
+        # OI Patterns
+        oi_patterns = [
+            r'Put\s*OI\s*Chg[^\d]*([+-]?\d{1,3}(?:,\d{3})*)',
+            r'Put.*?Change[^\d]*([+-]?\d{1,3}(?:,\d{3})*)',
+        ]
+        
+        for pattern in oi_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                data['put_oi'] = int(match.group(1).replace(',', '').replace('+', ''))
+                logger.info(f"✅ Put OI found: {data['put_oi']}")
+                break
+        
+        return data
 
-# === Function to update only PCR data in Google Sheet ===
-def update_google_sheets():
-    pcr_df = fetch_pcr_data()
-    if pcr_df is not None:
+    def extract_price_data(self, text):
+        """Extract price related data"""
+        data = {
+            'crudeoil_price': "0",
+            'crudeoil_change': "0", 
+            'crudeoil_percent_change': "0"
+        }
+        
+        # Price extraction
+        four_digit_numbers = re.findall(r'\b(\d{4})\b', text)
+        valid_prices = [p for p in four_digit_numbers if 5000 <= int(p) <= 6000]
+        
+        if valid_prices:
+            data['crudeoil_price'] = valid_prices[0]
+            logger.info(f"✅ Price found: {data['crudeoil_price']}")
+        
+        # Change extraction
+        change_match = re.search(r'([+-]?\d+\.\d+)\s*\(([+-]?\d+\.\d+)%\)', text)
+        if change_match:
+            data['crudeoil_change'] = change_match.group(1)
+            data['crudeoil_percent_change'] = change_match.group(2)
+            logger.info(f"✅ Change found: {data['crudeoil_change']}, {data['crudeoil_percent_change']}%")
+        
+        return data
+
+    def process_data(self, data):
+        """Process and format the extracted data"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
+        
+        # Calculate trends and changes
+        intraday_pcr_float = float(data['intraday_pcr']) if data['intraday_pcr'] != "0" else 0.0
+        trend = self.calculate_trend(intraday_pcr_float)
+        
+        # Calculate changes from last values
+        put_change = data['put_oi'] - self.last_values["put_oi"] if self.last_values["put_oi"] else 0
+        call_change = data['call_oi'] - self.last_values["call_oi"] if self.last_values["call_oi"] else 0
+        pcr_change = intraday_pcr_float - self.last_values["pcr"] if self.last_values["pcr"] else 0
+        
+        # Update last values
+        self.last_values.update({
+            "put_oi": data['put_oi'],
+            "call_oi": data['call_oi'], 
+            "pcr": intraday_pcr_float
+        })
+        
+        return {
+            "Timestamp": timestamp,
+            "Intraday Put Change OI": f"{data['put_oi']:,}",
+            "Put Change": f"{put_change:,}",
+            "Intraday Call Change OI": f"{data['call_oi']:,}",
+            "Call Change": f"{call_change:,}",
+            "Change %": self.calculate_change_percentage(data['put_oi'], data['call_oi']),
+            "Intraday PCR": data['intraday_pcr'],
+            "Pcr Change": f"{pcr_change:.2f}",
+            "Trend": trend,
+            "Observation": f"PCR {data['intraday_pcr']} indicates {trend.lower()}",
+            "Total Put OI": f"{data['total_put_oi']:,}",
+            "Total Call OI": f"{data['total_call_oi']:,}",
+            "Overall PCR": data['overall_pcr'],
+            "CrudeOil Price": data['crudeoil_price'],
+            "CrudeOil Change": data['crudeoil_change'],
+            "CrudeOil % Change": f"{data['crudeoil_percent_change']}%"
+        }
+
+    def calculate_trend(self, pcr_value):
+        """Calculate market trend based on PCR"""
+        if pcr_value <= 0.8:
+            return "Bearish Trend"
+        elif pcr_value >= 1.2:
+            return "Bullish Trend"
+        else:
+            return "Neutral Trend"
+
+    def calculate_change_percentage(self, put_oi, call_oi):
+        """Calculate percentage difference between Put and Call OI"""
+        abs_put = abs(put_oi)
+        abs_call = abs(call_oi)
+        
+        if abs_call > abs_put and abs_put > 0:
+            return f"Call higher by {((abs_call - abs_put) / abs_put * 100):.2f}%"
+        elif abs_put > abs_call and abs_call > 0:
+            return f"Put higher by {((abs_put - abs_call) / abs_call * 100):.2f}%"
+        else:
+            return "Both equal (0%)"
+
+    def update_google_sheets(self, data):
+        """Update Google Sheets with new data"""
         try:
-            gsheet_pcr_last_row = len(sheet_pcr.col_values(1)) + 1
-            if gsheet_pcr_last_row == 1:
-                # Updated headers with new columns
-                sheet_pcr.update(values=[["Timestamp", "Intraday Put Change OI", "Put Change", "Intraday Call Change OI", 
-                                         "Call Change", "Change %", "Intraday PCR", "Pcr Change", "Trend", "Observation",
-                                         "Total Put OI", "Total Call OI", "Overall PCR", "CrudeOil Price", "CrudeOil Change", "CrudeOil % Change"]],
-                                 range_name="A1:P1")
-                gsheet_pcr_last_row += 1
+            last_row = len(self.sheet.col_values(1)) + 1
             
-            sheet_pcr.update(values=[pcr_df.values[0].tolist()],
-                             range_name=f"A{gsheet_pcr_last_row}:P{gsheet_pcr_last_row}")
-            print(f"✅ PCR data written to Google Sheet 'PCR_Data_Live' at row {gsheet_pcr_last_row}")
-            print(f"📊 PCR: {pcr_df['Intraday PCR'][0]} | Put OI: {pcr_df['Intraday Put Change OI'][0]} | Call OI: {pcr_df['Intraday Call Change OI'][0]}")
+            # Add headers if first row
+            if last_row == 1:
+                headers = list(data.keys())
+                self.sheet.update(values=[headers], range_name="A1:P1")
+                last_row += 1
+            
+            # Update data
+            values = list(data.values())
+            self.sheet.update(values=[values], range_name=f"A{last_row}:P{last_row}")
+            logger.info(f"✅ Data updated at row {last_row}")
+            return True
+            
         except Exception as e:
-            print(f"❌ Error updating PCR Google Sheet: {e}")
+            logger.error(f"❌ Sheets update failed: {e}")
+            return False
 
-# === Background Thread Function ===
-def background_update():
-    while True:
-        now = datetime.now()
-        next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-        next_time = next_minute + timedelta(seconds=5)
-        wait_time = (next_time - now).total_seconds()
-        time.sleep(wait_time)
-        print(f"⏰ Updating PCR data at {datetime.now().strftime('%H:%M:%S IST')}")
-        update_google_sheets()
+    def run_single_update(self):
+        """Run a single update cycle"""
+        data = self.fetch_pcr_data()
+        if data:
+            success = self.update_google_sheets(data)
+            if success:
+                logger.info("🔄 Update completed successfully")
+            return success
+        return False
 
-# === Start Background Thread ===
-thread = threading.Thread(target=background_update, daemon=True)
-thread.start()
-print("✅ Background PCR updates started. Notebook is free to use. Press Ctrl+C in terminal to stop if needed.")
-print("📊 Now collecting: Put OI, Call OI, PCR, CrudeOil Price, CrudeOil Change, CrudeOil % Change")
+    def start_continuous_updates(self):
+        """Start continuous background updates"""
+        def update_loop():
+            while True:
+                try:
+                    self.run_single_update()
+                    time.sleep(Config.UPDATE_INTERVAL)
+                except Exception as e:
+                    logger.error(f"❌ Update loop error: {e}")
+                    time.sleep(30)  # Wait before retry
+        
+        thread = threading.Thread(target=update_loop, daemon=True)
+        thread.start()
+        logger.info("✅ Continuous updates started")
 
-# === Keep the script running ===
-try:
-    while True:
-        time.sleep(60)
-except KeyboardInterrupt:
-    print("🛑 Script stopped by user.")
+# === MAIN EXECUTION ===
+def main():
+    """Main function with different run modes"""
+    import sys
+    
+    tracker = PCRTracker()
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "single":
+            # Single update mode
+            tracker.run_single_update()
+        elif sys.argv[1] == "test":
+            # Test mode
+            data = tracker.fetch_pcr_data()
+            if data:
+                print("✅ Test successful - Data extracted:")
+                for key, value in data.items():
+                    print(f"   {key}: {value}")
+            else:
+                print("❌ Test failed")
+    else:
+        # Continuous mode (default)
+        print("🚀 Starting CrudeOil PCR Tracker...")
+        tracker.start_continuous_updates()
+        
+        # Keep main thread alive
+        try:
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            print("\n🛑 Tracker stopped by user")
+
+if __name__ == "__main__":
+    main()
