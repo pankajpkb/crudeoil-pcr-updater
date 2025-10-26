@@ -12,12 +12,12 @@ import pytz
 
 app = Flask(__name__)
 
-# Global variable to track last update
-last_update_time = None
+# Global variable to track last update minute
+last_update_minute = -1
 
 def pcr_background_job():
     print("🚀 PCR BACKGROUND JOB STARTED!")
-    global last_update_time
+    global last_update_minute
     
     while True:
         try:
@@ -26,18 +26,26 @@ def pcr_background_job():
             current_time = datetime.now(ist)
             current_hour = current_time.hour
             current_minute = current_time.minute
-            
-            print(f"⏰ Background check at {current_hour}:{current_minute:02d} IST")
+            current_second = current_time.second
             
             # Only run between 9 AM to 11:30 PM IST
             if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
-                if last_update_time != "outside_hours":
+                if last_update_minute != -2:
                     print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
-                    last_update_time = "outside_hours"
-                time.sleep(60)
+                    last_update_minute = -2
+                time.sleep(30)
                 continue
             
-            print(f"🔄 Auto-updating PCR data at {current_hour}:{current_minute:02d} IST...")
+            # Update only once per minute (at second 0-5)
+            if current_second > 5 or current_minute == last_update_minute:
+                # Wait for the next minute
+                sleep_time = 60 - current_second
+                if sleep_time > 5:  # Don't sleep too long
+                    sleep_time = 5
+                time.sleep(sleep_time)
+                continue
+            
+            print(f"🔄 Auto-updating PCR data at {current_hour}:{current_minute:02d}:{current_second:02d} IST...")
             
             # Your data fetching code
             pcr_url = "https://niftyinvest.com/put-call-ratio/CRUDEOILM"
@@ -78,8 +86,10 @@ def pcr_background_job():
                 empty_row = len(sheet.col_values(1)) + 1
                 print(f"📍 No empty rows found, appending to row: {empty_row}")
             
-            # Prepare data
-            timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")
+            # Prepare data with exact minute timing (seconds set to 00)
+            exact_minute_time = current_time.replace(second=0, microsecond=0)
+            timestamp = exact_minute_time.strftime("%Y-%m-%d %H:%M:%S IST")
+            
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
             
@@ -96,14 +106,20 @@ def pcr_background_job():
                 sheet.update_cell(empty_row, col, value)
             
             print(f"✅ AUTO-UPDATED SUCCESSFULLY at row {empty_row}!")
-            last_update_time = f"{current_hour}:{current_minute:02d}"
+            
+            # Update last update minute
+            last_update_minute = current_minute
+            
+            # Wait until next minute starts
+            sleep_time = 60 - datetime.now(ist).second
+            if sleep_time > 55:  # Safety check
+                sleep_time = 55
+            print(f"💤 Waiting {sleep_time} seconds for next minute...")
+            time.sleep(sleep_time)
             
         except Exception as e:
             print(f"❌ BACKGROUND JOB ERROR: {e}")
-        
-        # Wait 60 seconds before next update
-        print("💤 Waiting 60 seconds for next update...")
-        time.sleep(60)
+            time.sleep(30)
 
 # Keep-alive function to prevent idle timeout
 def keep_alive_job():
@@ -120,7 +136,7 @@ def keep_alive_job():
 
 @app.route('/')
 def home():
-    return "PCR Auto-Updater Running - 9 AM to 11:30 PM IST"
+    return "PCR Auto-Updater Running - 9 AM to 11:30 PM IST (Exactly Every Minute)"
 
 @app.route('/update')
 def manual_update():
@@ -160,7 +176,10 @@ def manual_update():
         if empty_row is None:
             empty_row = len(sheet.col_values(1)) + 1
         
-        timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S IST")
+        # Exact minute timing for manual update too
+        exact_minute_time = current_time.replace(second=0, microsecond=0)
+        timestamp = exact_minute_time.strftime("%Y-%m-%d %H:%M:%S IST")
+        
         change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
         trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
         
