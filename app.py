@@ -24,17 +24,28 @@ def extract_day_high_low(all_text):
         
         print("🔍 Searching for Day High/Low data...")
         
-        # Pattern 1: Look for "High" and "Low" with numbers
+        # Debug: Show relevant lines for High/Low
+        lines = all_text.split('\n')
+        for i, line in enumerate(lines):
+            if any(keyword in line.lower() for keyword in ['high', 'low', 'day']):
+                if len(line.strip()) > 10:  # Only meaningful lines
+                    print(f"Line {i}: {line.strip()}")
+        
+        # IMPROVED PATTERNS for High/Low
         high_patterns = [
-            r'High[^\d]*(\d{4,5})',
-            r'Day High[^\d]*(\d{4,5})',
+            r'High\s*:\s*(\d{4,5})',
+            r'Day High\s*:\s*(\d{4,5})',
             r'High.*?(\d{4,5})',
+            r'High<\/td><td[^>]*>(\d{4,5})',  # HTML table format
+            r'high[^>]*>(\d{4,5})<\/td>',     # HTML format
         ]
         
         low_patterns = [
-            r'Low[^\d]*(\d{4,5})', 
-            r'Day Low[^\d]*(\d{4,5})',
+            r'Low\s*:\s*(\d{4,5})',
+            r'Day Low\s*:\s*(\d{4,5})', 
             r'Low.*?(\d{4,5})',
+            r'Low<\/td><td[^>]*>(\d{4,5})',   # HTML table format
+            r'low[^>]*>(\d{4,5})<\/td>',      # HTML format
         ]
         
         # Try multiple patterns for High
@@ -42,7 +53,7 @@ def extract_day_high_low(all_text):
             high_match = re.search(pattern, all_text, re.IGNORECASE)
             if high_match:
                 day_high = high_match.group(1)
-                print(f"✅ Day High found: {day_high}")
+                print(f"✅ Day High found with pattern '{pattern}': {day_high}")
                 break
         
         # Try multiple patterns for Low
@@ -50,24 +61,45 @@ def extract_day_high_low(all_text):
             low_match = re.search(pattern, all_text, re.IGNORECASE)
             if low_match:
                 day_low = low_match.group(1)
-                print(f"✅ Day Low found: {day_low}")
+                print(f"✅ Day Low found with pattern '{pattern}': {day_low}")
                 break
         
-        # Pattern 2: Look for High/Low in table format
-        high_low_pattern = r'High.*?(\d{4,5}).*?Low.*?(\d{4,5})'
-        hl_match = re.search(high_low_pattern, all_text, re.IGNORECASE | re.DOTALL)
-        if hl_match:
-            day_high = hl_match.group(1)
-            day_low = hl_match.group(2)
-            print(f"✅ Day High/Low (table): {day_high}/{day_low}")
+        # Alternative: Look for High/Low in proximity (within 100 characters)
+        if day_high == "0" or day_low == "0":
+            high_low_proximity = r'High.*?(\d{4,5}).*?Low.*?(\d{4,5})'
+            hl_prox_match = re.search(high_low_proximity, all_text, re.IGNORECASE | re.DOTALL)
+            if hl_prox_match:
+                if day_high == "0":
+                    day_high = hl_prox_match.group(1)
+                if day_low == "0":
+                    day_low = hl_prox_match.group(2)
+                print(f"✅ Day High/Low (proximity): {day_high}/{day_low}")
         
-        # Pattern 3: Look for specific High/Low context
-        context_pattern = r'(\d{4,5})\s*High.*?(\d{4,5})\s*Low'
-        context_match = re.search(context_pattern, all_text, re.IGNORECASE)
-        if context_match:
-            day_high = context_match.group(1)
-            day_low = context_match.group(2)
-            print(f"✅ Day High/Low (context): {day_high}/{day_low}")
+        # Final fallback: Look for any 4-5 digit numbers near High/Low keywords
+        if day_high == "0":
+            high_context = re.search(r'High[^\d]{0,50}(\d{4,5})', all_text, re.IGNORECASE)
+            if high_context:
+                day_high = high_context.group(1)
+                print(f"✅ Day High (context): {day_high}")
+        
+        if day_low == "0":
+            low_context = re.search(r'Low[^\d]{0,50}(\d{4,5})', all_text, re.IGNORECASE)
+            if low_context:
+                day_low = low_context.group(1)
+                print(f"✅ Day Low (context): {day_low}")
+        
+        # Validate the extracted numbers are in reasonable range
+        if day_high != "0":
+            high_val = int(day_high)
+            if not (5000 <= high_val <= 7000):  # Adjusted range for crude oil
+                print(f"⚠️ Day High {day_high} outside expected range, resetting to 0")
+                day_high = "0"
+        
+        if day_low != "0":
+            low_val = int(day_low)
+            if not (5000 <= low_val <= 7000):  # Adjusted range for crude oil
+                print(f"⚠️ Day Low {day_low} outside expected range, resetting to 0")
+                day_low = "0"
         
         return day_high, day_low
         
@@ -260,8 +292,8 @@ def pcr_background_job():
                 crudeoil_change,          # CrudeOil Change
                 f"{crudeoil_percent_change}%",  # CrudeOil % Change
                 # === NEW: DAY HIGH/LOW DATA ===
-                day_high,                  # R1 - Day High
-                day_low                    # R2 - Day Low
+                day_high,                  # Q - Day High
+                day_low                    # R - Day Low
             ]
             
             # Add data to specific row
@@ -421,8 +453,8 @@ def manual_update():
             crudeoil_change,          # Dynamic CrudeOil Change
             f"{crudeoil_percent_change}%",  # Dynamic CrudeOil % Change
             # === NEW: DAY HIGH/LOW DATA ===
-            day_high,                  # R1 - Day High
-            day_low                    # R2 - Day Low
+            day_high,                  # Q - Day High
+            day_low                    # R - Day Low
         ]
         
         for col, value in enumerate(new_row, start=1):
