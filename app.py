@@ -17,7 +17,7 @@ last_update_minute = -1
 update_in_progress = False  # 🔒 NEW: Prevent duplicate updates
 
 def extract_day_high_low(all_text):
-    """Extract Day High and Day Low from website text"""
+    """Extract Day High and Day Low from website text - IMPROVED VERSION"""
     try:
         day_high = "0"
         day_low = "0"
@@ -27,68 +27,91 @@ def extract_day_high_low(all_text):
         # Debug: Show relevant lines for High/Low
         lines = all_text.split('\n')
         for i, line in enumerate(lines):
-            if any(keyword in line.lower() for keyword in ['high', 'low', 'day']):
-                if len(line.strip()) > 10:  # Only meaningful lines
+            if any(keyword in line.lower() for keyword in ['high', 'low', 'l:', 'h:', 'l :', 'h :']):
+                if len(line.strip()) > 3:  # Only meaningful lines
                     print(f"Line {i}: {line.strip()}")
         
-        # IMPROVED PATTERNS for High/Low
-        high_patterns = [
-            r'High\s*:\s*(\d{4,5})',
-            r'Day High\s*:\s*(\d{4,5})',
-            r'High.*?(\d{4,5})',
-            r'High<\/td><td[^>]*>(\d{4,5})',  # HTML table format
-            r'high[^>]*>(\d{4,5})<\/td>',     # HTML format
+        # IMPROVED PATTERNS for NiftyInvest specific format
+        # Pattern for "L: 5397    H: 5455" format
+        high_low_patterns = [
+            r'L:\s*(\d{4,5})\s*H:\s*(\d{4,5})',  # L: 5397 H: 5455
+            r'Low\s*:\s*(\d{4,5}).*?High\s*:\s*(\d{4,5})',  # Low: 5397 High: 5455
+            r'L\s*:\s*(\d{4,5}).*?H\s*:\s*(\d{4,5})',  # L : 5397 H : 5455
+            r'Day Low\s*:\s*(\d{4,5}).*?Day High\s*:\s*(\d{4,5})',  # Day Low: 5397 Day High: 5455
         ]
         
-        low_patterns = [
-            r'Low\s*:\s*(\d{4,5})',
-            r'Day Low\s*:\s*(\d{4,5})', 
-            r'Low.*?(\d{4,5})',
-            r'Low<\/td><td[^>]*>(\d{4,5})',   # HTML table format
-            r'low[^>]*>(\d{4,5})<\/td>',      # HTML format
-        ]
-        
-        # Try multiple patterns for High
-        for pattern in high_patterns:
-            high_match = re.search(pattern, all_text, re.IGNORECASE)
-            if high_match:
-                day_high = high_match.group(1)
-                print(f"✅ Day High found with pattern '{pattern}': {day_high}")
+        # Try multiple patterns for High/Low together
+        for pattern in high_low_patterns:
+            hl_match = re.search(pattern, all_text, re.IGNORECASE)
+            if hl_match:
+                day_low = hl_match.group(1)
+                day_high = hl_match.group(2)
+                print(f"✅ Day High/Low found with pattern '{pattern}': {day_high}/{day_low}")
                 break
         
-        # Try multiple patterns for Low
-        for pattern in low_patterns:
-            low_match = re.search(pattern, all_text, re.IGNORECASE)
-            if low_match:
-                day_low = low_match.group(1)
-                print(f"✅ Day Low found with pattern '{pattern}': {day_low}")
-                break
-        
-        # Alternative: Look for High/Low in proximity (within 100 characters)
+        # If not found together, try individual patterns
         if day_high == "0" or day_low == "0":
-            high_low_proximity = r'High.*?(\d{4,5}).*?Low.*?(\d{4,5})'
-            hl_prox_match = re.search(high_low_proximity, all_text, re.IGNORECASE | re.DOTALL)
-            if hl_prox_match:
-                if day_high == "0":
-                    day_high = hl_prox_match.group(1)
+            # Individual High patterns
+            high_patterns = [
+                r'H:\s*(\d{4,5})',  # H: 5455
+                r'High\s*:\s*(\d{4,5})',  # High: 5455
+                r'H\s*:\s*(\d{4,5})',  # H : 5455
+                r'Day High\s*:\s*(\d{4,5})',  # Day High: 5455
+            ]
+            
+            # Individual Low patterns  
+            low_patterns = [
+                r'L:\s*(\d{4,5})',  # L: 5397
+                r'Low\s*:\s*(\d{4,5})',  # Low: 5397
+                r'L\s*:\s*(\d{4,5})',  # L : 5397
+                r'Day Low\s*:\s*(\d{4,5})',  # Day Low: 5397
+            ]
+            
+            # Try individual High patterns
+            if day_high == "0":
+                for pattern in high_patterns:
+                    high_match = re.search(pattern, all_text, re.IGNORECASE)
+                    if high_match:
+                        day_high = high_match.group(1)
+                        print(f"✅ Day High found with pattern '{pattern}': {day_high}")
+                        break
+            
+            # Try individual Low patterns
+            if day_low == "0":
+                for pattern in low_patterns:
+                    low_match = re.search(pattern, all_text, re.IGNORECASE)
+                    if low_match:
+                        day_low = low_match.group(1)
+                        print(f"✅ Day Low found with pattern '{pattern}': {day_low}")
+                        break
+        
+        # Alternative: Look for numbers near price area (context based)
+        if day_high == "0" or day_low == "0":
+            # Look for pattern like "5432 L: 5397 H: 5455"
+            price_context = re.search(r'(\d{4})\s*L:\s*(\d{4,5})\s*H:\s*(\d{4,5})', all_text)
+            if price_context:
                 if day_low == "0":
-                    day_low = hl_prox_match.group(2)
-                print(f"✅ Day High/Low (proximity): {day_high}/{day_low}")
+                    day_low = price_context.group(2)
+                if day_high == "0":
+                    day_high = price_context.group(3)
+                print(f"✅ Day High/Low (price context): {day_high}/{day_low}")
         
-        # Final fallback: Look for any 4-5 digit numbers near High/Low keywords
-        if day_high == "0":
-            high_context = re.search(r'High[^\d]{0,50}(\d{4,5})', all_text, re.IGNORECASE)
-            if high_context:
-                day_high = high_context.group(1)
-                print(f"✅ Day High (context): {day_high}")
+        # Final fallback: Look for any 4-5 digit numbers in sequence that could be High/Low
+        if day_high == "0" or day_low == "0":
+            # Find all 4-5 digit numbers
+            all_numbers = re.findall(r'\b(\d{4,5})\b', all_text)
+            valid_numbers = [n for n in all_numbers if 5000 <= int(n) <= 7000]
+            
+            # If we have at least 2 valid numbers, take the highest and lowest as High/Low
+            if len(valid_numbers) >= 2:
+                numbers_int = [int(n) for n in valid_numbers]
+                if day_low == "0":
+                    day_low = str(min(numbers_int))
+                if day_high == "0":
+                    day_high = str(max(numbers_int))
+                print(f"✅ Day High/Low (from number range): {day_high}/{day_low}")
         
-        if day_low == "0":
-            low_context = re.search(r'Low[^\d]{0,50}(\d{4,5})', all_text, re.IGNORECASE)
-            if low_context:
-                day_low = low_context.group(1)
-                print(f"✅ Day Low (context): {day_low}")
-        
-        # Validate the extracted numbers are in reasonable range
+        # Validate the extracted numbers are in reasonable range for crude oil
         if day_high != "0":
             high_val = int(day_high)
             if not (5000 <= high_val <= 7000):  # Adjusted range for crude oil
@@ -101,6 +124,7 @@ def extract_day_high_low(all_text):
                 print(f"⚠️ Day Low {day_low} outside expected range, resetting to 0")
                 day_low = "0"
         
+        print(f"🎯 FINAL Day High/Low: {day_high}/{day_low}")
         return day_high, day_low
         
     except Exception as e:
@@ -156,6 +180,11 @@ def pcr_background_job():
             response = requests.get(pcr_url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.text, "html.parser")
             all_text = soup.get_text()
+            
+            # === TEMPORARY DEBUG - Check what text we're getting ===
+            print("=== DEBUG: First 1500 characters of text ===")
+            print(all_text[:1500])
+            print("=== END DEBUG ===")
             
             # === EXISTING INTRADAY DATA EXTRACTION ===
             put_match = re.search(r'Put OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
@@ -362,6 +391,11 @@ def manual_update():
         soup = BeautifulSoup(response.text, "html.parser")
         all_text = soup.get_text()
         
+        # === TEMPORARY DEBUG ===
+        print("=== DEBUG: First 1500 characters of text ===")
+        print(all_text[:1500])
+        print("=== END DEBUG ===")
+        
         # === EXISTING INTRADAY DATA ===
         put_match = re.search(r'Put OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
         call_match = re.search(r'Call OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
@@ -416,7 +450,7 @@ def manual_update():
         gc = gspread.service_account_from_dict(creds_json)
         sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
         
-        data_range = sheet.range('A18:A2000')
+        data_range = sheet.range('A18:A5000')
         empty_row = None
         
         for i, cell in enumerate(data_range):
