@@ -16,6 +16,65 @@ app = Flask(__name__)
 last_update_minute = -1
 update_in_progress = False  # 🔒 NEW: Prevent duplicate updates
 
+def extract_day_high_low(all_text):
+    """Extract Day High and Day Low from website text"""
+    try:
+        day_high = "0"
+        day_low = "0"
+        
+        print("🔍 Searching for Day High/Low data...")
+        
+        # Pattern 1: Look for "High" and "Low" with numbers
+        high_patterns = [
+            r'High[^\d]*(\d{4,5})',
+            r'Day High[^\d]*(\d{4,5})',
+            r'High.*?(\d{4,5})',
+        ]
+        
+        low_patterns = [
+            r'Low[^\d]*(\d{4,5})', 
+            r'Day Low[^\d]*(\d{4,5})',
+            r'Low.*?(\d{4,5})',
+        ]
+        
+        # Try multiple patterns for High
+        for pattern in high_patterns:
+            high_match = re.search(pattern, all_text, re.IGNORECASE)
+            if high_match:
+                day_high = high_match.group(1)
+                print(f"✅ Day High found: {day_high}")
+                break
+        
+        # Try multiple patterns for Low
+        for pattern in low_patterns:
+            low_match = re.search(pattern, all_text, re.IGNORECASE)
+            if low_match:
+                day_low = low_match.group(1)
+                print(f"✅ Day Low found: {day_low}")
+                break
+        
+        # Pattern 2: Look for High/Low in table format
+        high_low_pattern = r'High.*?(\d{4,5}).*?Low.*?(\d{4,5})'
+        hl_match = re.search(high_low_pattern, all_text, re.IGNORECASE | re.DOTALL)
+        if hl_match:
+            day_high = hl_match.group(1)
+            day_low = hl_match.group(2)
+            print(f"✅ Day High/Low (table): {day_high}/{day_low}")
+        
+        # Pattern 3: Look for specific High/Low context
+        context_pattern = r'(\d{4,5})\s*High.*?(\d{4,5})\s*Low'
+        context_match = re.search(context_pattern, all_text, re.IGNORECASE)
+        if context_match:
+            day_high = context_match.group(1)
+            day_low = context_match.group(2)
+            print(f"✅ Day High/Low (context): {day_high}/{day_low}")
+        
+        return day_high, day_low
+        
+    except Exception as e:
+        print(f"❌ Error extracting Day High/Low: {e}")
+        return "0", "0"
+
 def pcr_background_job():
     print("🚀 PCR BACKGROUND JOB STARTED!")
     global last_update_minute, update_in_progress
@@ -147,9 +206,13 @@ def pcr_background_job():
                         crudeoil_percent_change = alt_change.group(2)
                         print(f"✅ CrudeOil Change Data (Alt): {crudeoil_change}, {crudeoil_percent_change}%")
             
+            # === NEW: DAY HIGH/LOW EXTRACTION ===
+            day_high, day_low = extract_day_high_low(all_text)
+            
             print(f"✅ Data extracted - Put: {put_oi}, Call: {call_oi}, PCR: {intraday_pcr}")
             print(f"📈 Overall Data - Total Put: {total_put_oi:,}, Total Call: {total_call_oi:,}, Overall PCR: {overall_pcr}")
             print(f"💰 Price Data - Price: {crudeoil_price}, Change: {crudeoil_change}, % Change: {crudeoil_percent_change}%")
+            print(f"📊 Day High/Low - High: {day_high}, Low: {day_low}")
             
             # Google Sheets connection
             creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
@@ -177,7 +240,7 @@ def pcr_background_job():
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
             
-            # === UPDATED ROW DATA WITH DYNAMIC VALUES ===
+            # === UPDATED ROW DATA WITH DYNAMIC VALUES + DAY HIGH/LOW ===
             new_row = [
                 timestamp, 
                 f"{put_oi:,}", 
@@ -195,11 +258,16 @@ def pcr_background_job():
                 overall_pcr,              # Overall PCR
                 crudeoil_price,           # CrudeOil Price
                 crudeoil_change,          # CrudeOil Change
-                f"{crudeoil_percent_change}%"  # CrudeOil % Change
+                f"{crudeoil_percent_change}%",  # CrudeOil % Change
+                # === NEW: DAY HIGH/LOW DATA ===
+                day_high,                  # R1 - Day High
+                day_low                    # R2 - Day Low
             ]
             
             # Add data to specific row
             print(f"📝 Adding data to row {empty_row}: {timestamp}")
+            
+            # Update columns A to R (18 columns)
             for col, value in enumerate(new_row, start=1):
                 sheet.update_cell(empty_row, col, value)
             
@@ -309,6 +377,9 @@ def manual_update():
             crudeoil_change = change_match.group(1)
             crudeoil_percent_change = change_match.group(2)
         
+        # === NEW: DAY HIGH/LOW EXTRACTION ===
+        day_high, day_low = extract_day_high_low(all_text)
+        
         creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
         gc = gspread.service_account_from_dict(creds_json)
         sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
@@ -331,7 +402,7 @@ def manual_update():
         change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
         trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
         
-        # Updated row with dynamic data
+        # Updated row with dynamic data + Day High/Low
         new_row = [
             timestamp, 
             f"{put_oi:,}", 
@@ -348,7 +419,10 @@ def manual_update():
             overall_pcr,              # Dynamic Overall PCR
             crudeoil_price,           # Dynamic CrudeOil Price
             crudeoil_change,          # Dynamic CrudeOil Change
-            f"{crudeoil_percent_change}%"  # Dynamic CrudeOil % Change
+            f"{crudeoil_percent_change}%",  # Dynamic CrudeOil % Change
+            # === NEW: DAY HIGH/LOW DATA ===
+            day_high,                  # R1 - Day High
+            day_low                    # R2 - Day Low
         ]
         
         for col, value in enumerate(new_row, start=1):
