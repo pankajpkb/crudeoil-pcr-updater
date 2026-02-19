@@ -289,6 +289,40 @@ def pcr_background_job():
                     empty_row = i + 18
                     print(f"📍 Found empty row at: {empty_row}")
                     break
+                  # ==============================
+# READ PREVIOUS VALUES
+# ==============================
+
+prev_put = 0
+prev_call = 0
+
+try:
+
+    if empty_row > 18:
+
+        prev_put_str = sheet.cell(empty_row - 1, 2).value
+        prev_call_str = sheet.cell(empty_row - 1, 4).value
+
+        if prev_put_str:
+            prev_put = int(prev_put_str.replace(',', ''))
+
+        if prev_call_str:
+            prev_call = int(prev_call_str.replace(',', ''))
+
+except Exception as e:
+
+    print("⚠️ Previous read error:", e)
+
+
+# ==============================
+# CALCULATE DIFFERENCE
+# ==============================
+
+put_diff = put_oi - prev_put
+call_diff = call_oi - prev_call
+
+print(f"📈 Put Diff: {put_diff}, Call Diff: {call_diff}")
+
             
             if empty_row is None:
                 empty_row = len(sheet.col_values(1)) + 1
@@ -305,9 +339,9 @@ def pcr_background_job():
             new_row = [
                 timestamp, 
                 f"{put_oi:,}", 
-                "0", 
+                f"{put_diff:,}", 
                 f"{call_oi:,}", 
-                "0",
+                f"{call_diff:,}",
                 change_percent, 
                 intraday_pcr, 
                 "0.00", 
@@ -460,6 +494,43 @@ def manual_update():
         
         if empty_row is None:
             empty_row = len(sheet.col_values(1)) + 1
+            # ==============================
+# NEW: READ PREVIOUS VALUES FOR DIFFERENCE
+# ==============================
+
+prev_put = 0
+prev_call = 0
+
+try:
+
+    if empty_row > 18:
+
+        prev_put_str = sheet.cell(empty_row - 1, 2).value
+        prev_call_str = sheet.cell(empty_row - 1, 4).value
+
+        if prev_put_str and prev_put_str != "":
+
+            prev_put = int(prev_put_str.replace(',', ''))
+
+        if prev_call_str and prev_call_str != "":
+
+            prev_call = int(prev_call_str.replace(',', ''))
+
+        print(f"📊 Manual Previous Put: {prev_put}, Previous Call: {prev_call}")
+
+except Exception as e:
+
+    print(f"⚠️ Manual Previous value read error: {e}")
+
+
+# ==============================
+# CALCULATE DIFFERENCE
+# ==============================
+
+put_diff = put_oi - prev_put
+call_diff = call_oi - prev_call
+
+print(f"📈 Manual Put Diff: {put_diff}, Call Diff: {call_diff}")
         
         # Exact minute timing for manual update too
         exact_minute_time = current_time.replace(second=0, microsecond=0)
@@ -472,9 +543,9 @@ def manual_update():
         new_row = [
             timestamp, 
             f"{put_oi:,}", 
-            "0", 
+            f"{put_diff:,}", 
             f"{call_oi:,}", 
-            "0",
+            f"{call_diff:,}",
             change_percent, 
             intraday_pcr, 
             "0.00", 
