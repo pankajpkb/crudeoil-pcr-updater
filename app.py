@@ -290,6 +290,7 @@ def pcr_background_job():
                     print(f"📍 Found empty row at: {empty_row}")
                     break
                   # ==============================
+# ==============================
 # READ PREVIOUS VALUES
 # ==============================
 
@@ -303,19 +304,25 @@ try:
         prev_put_str = sheet.cell(empty_row - 1, 2).value
         prev_call_str = sheet.cell(empty_row - 1, 4).value
 
+
         if prev_put_str:
+
             prev_put = int(prev_put_str.replace(',', ''))
 
+
         if prev_call_str:
+
             prev_call = int(prev_call_str.replace(',', ''))
+
 
 except Exception as e:
 
-    print("⚠️ Previous read error:", e)
+    print("Previous read error:", e)
+
 
 
 # ==============================
-# CALCULATE DIFFERENCE
+# DIFFERENCE
 # ==============================
 
 put_diff = put_oi - prev_put
