@@ -313,7 +313,7 @@ def pcr_background_job():
                 overall_pcr = overall_pcr_match.group(1)
                 print(f"✅ Overall PCR: {overall_pcr}")
             
-            # Extract COI PCR (for Column G)
+            # 🔥 Extract COI PCR (for Column G) - Ye BASE value hai Trend ke liye
             coi_pcr = "0.00"
             coi_pcr_match = re.search(r'COI PCR\s*([+-]?\d+\.\d+)', all_text)
             if coi_pcr_match:
@@ -404,39 +404,43 @@ def pcr_background_job():
             
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             
-            # 🔥 FINAL FIX: Exact format as requested
+            # 🔥 FIXED: Trend and Observation based on COI PCR (Column G)
             # A: Timestamp
             # B: Intraday Put Change OI
             # C: Put Change (Difference)
             # D: Intraday Call Change OI
             # E: Call Change (Difference)
             # F: Change %
-            # G: COI PCR
-            # H: Pcr Change (Intraday PCR)
-            # I: Trend
-            # J: Observation
+            # G: COI PCR (BASE for Trend)
+            # H: Intraday PCR
+            # I: Trend (based on COI PCR)
+            # J: Observation (based on COI PCR)
             # K: Put OI (Total)
             # L: Call OI (Total)
             # M: PCR (Overall)
             # N: CrudeOilM Price
-            # O: CHG (Change)
+            # O: CHG
             # P: CHG %
             # Q: Day High
             # R: Day Low
             
-            # Determine trend based on Intraday PCR
-            if intraday_pcr != "0":
-                pcr_value = float(intraday_pcr)
-                if pcr_value <= 0.8:
-                    trend = "Bearish Trend"
-                elif pcr_value >= 1.2:
-                    trend = "Bullish Trend"
-                else:
+            # 🔥 Calculate Trend based on COI PCR (Column G)
+            if coi_pcr != "0" and coi_pcr != "0.00":
+                try:
+                    coi_value = float(coi_pcr)
+                    if coi_value <= 0.8:
+                        trend = "Bearish Trend"
+                    elif coi_value >= 1.2:
+                        trend = "Bullish Trend"
+                    else:
+                        trend = "Neutral Trend"
+                except:
                     trend = "Neutral Trend"
             else:
                 trend = "Neutral Trend"
             
-            observation = f"PCR {intraday_pcr} indicates {trend.lower()}."
+            # 🔥 Observation based on COI PCR
+            observation = f"COI PCR {coi_pcr} indicates {trend.lower()}."
             
             new_row = [
                 timestamp,                          # A - Timestamp
@@ -445,22 +449,23 @@ def pcr_background_job():
                 f"{call_oi:,}",                      # D - Intraday Call Change OI
                 call_difference,                      # E - Call Change (Difference)
                 change_percent,                       # F - Change %
-                coi_pcr,                              # G - COI PCR
-                intraday_pcr,                         # H - Pcr Change (Intraday PCR)
-                trend,                                # I - Trend
-                observation,                          # J - Observation
+                coi_pcr,                              # G - COI PCR (BASE for Trend)
+                intraday_pcr,                         # H - Intraday PCR
+                trend,                                # I - Trend (based on COI PCR)
+                observation,                          # J - Observation (based on COI PCR)
                 f"{total_put_oi:,}",                 # K - Put OI (Total)
                 f"{total_call_oi:,}",                 # L - Call OI (Total)
                 overall_pcr,                           # M - PCR (Overall)
                 crudeoil_price,                        # N - CrudeOilM Price
-                crudeoil_change,                       # O - CHG (Change)
+                crudeoil_change,                       # O - CHG
                 f"{crudeoil_percent_change}%",        # P - CHG %
                 day_high,                              # Q - Day High
                 day_low                                # R - Day Low
             ]
             
             print(f"📝 Adding data to row {empty_row}")
-            print(f"📝 Format: A={timestamp}, B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}, F={change_percent}, G={coi_pcr}, H={intraday_pcr}, I={trend}, J={observation}, K={total_put_oi:,}, L={total_call_oi:,}, M={overall_pcr}, N={crudeoil_price}, O={crudeoil_change}, P={crudeoil_percent_change}%, Q={day_high}, R={day_low}")
+            print(f"📝 G (COI PCR)={coi_pcr} → I (Trend)={trend}, J (Observation)={observation}")
+            print(f"📝 H (Intraday PCR)={intraday_pcr} (for reference only)")
             
             # Update columns A to R (18 columns)
             for col, value in enumerate(new_row, start=1):
@@ -498,7 +503,7 @@ def keep_alive_job():
 
 @app.route('/')
 def home():
-    return "PCR Auto-Updater Running - Daily Reset at 8:58 AM | Live Data 9 AM to 11:30 PM IST | ✅ FINAL FORMAT: A=Timestamp, B=Intraday Put OI, C=Put Change, D=Intraday Call OI, E=Call Change, F=Change%, G=COI PCR, H=Pcr Change(Intraday PCR), I=Trend, J=Observation, K=Put OI(Total), L=Call OI(Total), M=PCR(Overall), N=CrudeOilM Price, O=CHG, P=CHG%, Q=Day High, R=Day Low"
+    return "PCR Auto-Updater Running - ✅ Trend based on COI PCR (Column G) | Daily Reset at 8:58 AM | Live Data 9 AM to 11:30 PM IST"
 
 @app.route('/update')
 def manual_update():
@@ -557,7 +562,7 @@ def manual_update():
         if overall_pcr_match:
             overall_pcr = overall_pcr_match.group(1)
         
-        # Extract COI PCR
+        # Extract COI PCR (BASE for Trend)
         coi_pcr = "0.00"
         coi_pcr_match = re.search(r'COI PCR\s*([+-]?\d+\.\d+)', all_text)
         if coi_pcr_match:
@@ -620,21 +625,25 @@ def manual_update():
         
         change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
         
-        # Determine trend based on Intraday PCR
-        if intraday_pcr != "0":
-            pcr_value = float(intraday_pcr)
-            if pcr_value <= 0.8:
-                trend = "Bearish Trend"
-            elif pcr_value >= 1.2:
-                trend = "Bullish Trend"
-            else:
+        # 🔥 Calculate Trend based on COI PCR
+        if coi_pcr != "0" and coi_pcr != "0.00":
+            try:
+                coi_value = float(coi_pcr)
+                if coi_value <= 0.8:
+                    trend = "Bearish Trend"
+                elif coi_value >= 1.2:
+                    trend = "Bullish Trend"
+                else:
+                    trend = "Neutral Trend"
+            except:
                 trend = "Neutral Trend"
         else:
             trend = "Neutral Trend"
         
-        observation = f"PCR {intraday_pcr} indicates {trend.lower()}."
+        # 🔥 Observation based on COI PCR
+        observation = f"COI PCR {coi_pcr} indicates {trend.lower()}."
         
-        # FINAL FIX: Manual update with correct format
+        # FINAL: Manual update with Trend based on COI PCR
         new_row = [
             timestamp,                          # A - Timestamp
             f"{put_oi:,}",                      # B - Intraday Put Change OI
@@ -642,10 +651,10 @@ def manual_update():
             f"{call_oi:,}",                      # D - Intraday Call Change OI
             call_difference,                      # E - Call Change
             change_percent,                       # F - Change %
-            coi_pcr,                              # G - COI PCR
-            intraday_pcr,                         # H - Pcr Change (Intraday PCR)
-            trend,                                # I - Trend
-            observation,                          # J - Observation
+            coi_pcr,                              # G - COI PCR (BASE)
+            intraday_pcr,                         # H - Intraday PCR
+            trend,                                # I - Trend (based on COI PCR)
+            observation,                          # J - Observation (based on COI PCR)
             f"{total_put_oi:,}",                 # K - Put OI (Total)
             f"{total_call_oi:,}",                 # L - Call OI (Total)
             overall_pcr,                           # M - PCR (Overall)
@@ -657,7 +666,7 @@ def manual_update():
         ]
         
         print(f"📝 Manual update at row {empty_row}")
-        print(f"📝 G (COI PCR)={coi_pcr}, H (Intraday PCR)={intraday_pcr}")
+        print(f"📝 G (COI PCR)={coi_pcr} → I (Trend)={trend}, J={observation}")
         
         for col, value in enumerate(new_row, start=1):
             sheet.update_cell(empty_row, col, value)
@@ -666,7 +675,7 @@ def manual_update():
         last_written_row = empty_row
         
         update_in_progress = False
-        return f"✅ Manual Update Successful at row {empty_row}: G(COI PCR)={coi_pcr}, H(Intraday PCR)={intraday_pcr}"
+        return f"✅ Manual Update Successful at row {empty_row}: Trend based on COI PCR={coi_pcr}"
         
     except Exception as e:
         update_in_progress = False
@@ -701,7 +710,7 @@ def manual_reset():
     except Exception as e:
         return f"❌ Reset Error: {e}"
 
-print("🎉 Starting PCR Auto-Updater with FINAL CORRECT FORMAT...")
+print("🎉 Starting PCR Auto-Updater with Trend based on COI PCR...")
 
 # Start all jobs
 background_thread = threading.Thread(target=pcr_background_job, daemon=True)
@@ -716,25 +725,11 @@ reset_thread.start()
 print("✅ All jobs started successfully!")
 print("⏰ Daily Reset scheduled at 8:58 AM IST")
 print("📊 Live Data: 9:00 AM to 11:30 PM IST")
-print("📈 FINAL COLUMN MAPPING:")
-print("   A: Timestamp")
-print("   B: Intraday Put Change OI")
-print("   C: Put Change (Difference)")
-print("   D: Intraday Call Change OI")
-print("   E: Call Change (Difference)")
-print("   F: Change %")
-print("   G: COI PCR")
-print("   H: Pcr Change (Intraday PCR)")
-print("   I: Trend")
-print("   J: Observation")
-print("   K: Put OI (Total)")
-print("   L: Call OI (Total)")
-print("   M: PCR (Overall)")
-print("   N: CrudeOilM Price")
-print("   O: CHG")
-print("   P: CHG %")
-print("   Q: Day High")
-print("   R: Day Low")
+print("📈 FINAL LOGIC: Trend and Observation based on COI PCR (Column G)")
+print("   G = COI PCR (from website)")
+print("   H = Intraday PCR (from website, for reference)")
+print("   I = Trend based on COI PCR value")
+print("   J = Observation based on COI PCR")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
