@@ -23,7 +23,7 @@ previous_intraday_call_oi = None
 # Also track the last row we wrote to
 last_written_row = None
 
-# 🔥 NEW: Track if today's reset has been done
+# Track if today's reset has been done
 reset_done_today = False
 
 def extract_day_high_low(all_text):
@@ -126,7 +126,7 @@ def extract_day_high_low(all_text):
         print(f"❌ Error extracting Day High/Low: {e}")
         return "0", "0"
 
-# 🔥 NEW: Daily Reset Function
+# Daily Reset Function
 def daily_reset_job():
     """Check daily at 8:58 AM and clear the sheet data"""
     global reset_done_today, previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
@@ -313,6 +313,25 @@ def pcr_background_job():
                 overall_pcr = overall_pcr_match.group(1)
                 print(f"✅ Overall PCR: {overall_pcr}")
             
+            # 🔥 NEW: Extract COI PCR (for Column G)
+            coi_pcr = "0.00"
+            coi_pcr_match = re.search(r'COI PCR\s*([+-]?\d+\.\d+)', all_text)
+            if coi_pcr_match:
+                coi_pcr = coi_pcr_match.group(1)
+                print(f"✅ COI PCR: {coi_pcr}")
+            else:
+                # Try alternative pattern
+                coi_pcr_alt = re.search(r'COI\s*PCR\s*([+-]?\d+\.\d+)', all_text, re.IGNORECASE)
+                if coi_pcr_alt:
+                    coi_pcr = coi_pcr_alt.group(1)
+                    print(f"✅ COI PCR (alt): {coi_pcr}")
+            
+            # 🔥 NEW: Extract COI Str % (optional, for debugging)
+            coi_str_match = re.search(r'COI Str %\s*([+-]?\d+\.\d+)\s*%', all_text)
+            if coi_str_match:
+                coi_str = coi_str_match.group(1)
+                print(f"✅ COI Str %: {coi_str}%")
+            
             # Price extraction
             four_digit_numbers = re.findall(r'\b(\d{4})\b', all_text)
             if four_digit_numbers:
@@ -345,6 +364,7 @@ def pcr_background_job():
             
             print(f"✅ Intraday Data - Put: {put_oi:,}, Call: {call_oi:,}, PCR: {intraday_pcr}")
             print(f"📈 Total OI Data - Put: {total_put_oi:,}, Call: {total_call_oi:,}, PCR: {overall_pcr}")
+            print(f"📊 COI PCR - {coi_pcr}")
             
             creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
             gc = gspread.service_account_from_dict(creds_json)
@@ -391,32 +411,32 @@ def pcr_background_job():
             change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
             trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
             
-            # ROW DATA - C = current B - previous B, E = current D - previous D
+            # ROW DATA - G now has COI PCR instead of hardcoded "0.00"
             new_row = [
                 timestamp, 
                 f"{put_oi:,}",           # B - Current Intraday Put Change OI
                 put_difference,           # C - Difference from previous B
                 f"{call_oi:,}",           # D - Current Intraday Call Change OI
                 call_difference,           # E - Difference from previous D
-                change_percent, 
-                intraday_pcr, 
-                "0.00", 
-                trend,
-                f"PCR {intraday_pcr} indicates {trend.lower()}.",
-                f"{total_put_oi:,}",      # K - Total Put OI
-                f"{total_call_oi:,}",     # L - Total Call OI
-                overall_pcr,              # M - Overall PCR
-                crudeoil_price,           # N - CrudeOil Price
-                crudeoil_change,          # O - CrudeOil Change
-                f"{crudeoil_percent_change}%",  # P - CrudeOil % Change
-                day_high,                  # Q - Day High
-                day_low                    # R - Day Low
+                change_percent,            # F - Change percent text
+                coi_pcr,                   # G - 🔥 COI PCR (from website)
+                trend,                     # H - Trend (Bullish/Bearish/Neutral)
+                f"PCR {intraday_pcr} indicates {trend.lower()}.",  # I - Description
+                f"{total_put_oi:,}",      # J - Total Put OI
+                f"{total_call_oi:,}",     # K - Total Call OI
+                overall_pcr,               # L - Overall PCR
+                crudeoil_price,            # M - CrudeOil Price
+                crudeoil_change,           # N - CrudeOil Change
+                f"{crudeoil_percent_change}%",  # O - CrudeOil % Change
+                day_high,                  # P - Day High
+                day_low                    # Q - Day Low
+                # Note: Column R is empty (18th column)
             ]
             
             print(f"📝 Adding data to row {empty_row}: {timestamp}")
-            print(f"📝 Row data: B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}")
+            print(f"📝 Row data: B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}, G={coi_pcr}")
             
-            # Update all columns
+            # Update columns A to Q (17 columns, R is empty)
             for col, value in enumerate(new_row, start=1):
                 sheet.update_cell(empty_row, col, value)
             
@@ -452,7 +472,7 @@ def keep_alive_job():
 
 @app.route('/')
 def home():
-    return "PCR Auto-Updater Running - Daily Reset at 8:58 AM | Live Data 9 AM to 11:30 PM IST"
+    return "PCR Auto-Updater Running - Daily Reset at 8:58 AM | Live Data 9 AM to 11:30 PM IST | COI PCR in Column G"
 
 @app.route('/update')
 def manual_update():
@@ -511,6 +531,13 @@ def manual_update():
         if overall_pcr_match:
             overall_pcr = overall_pcr_match.group(1)
         
+        # 🔥 NEW: Extract COI PCR
+        coi_pcr = "0.00"
+        coi_pcr_match = re.search(r'COI PCR\s*([+-]?\d+\.\d+)', all_text)
+        if coi_pcr_match:
+            coi_pcr = coi_pcr_match.group(1)
+            print(f"✅ COI PCR: {coi_pcr}")
+        
         # Price extraction
         four_digit_numbers = re.findall(r'\b(\d{4})\b', all_text)
         if four_digit_numbers:
@@ -568,29 +595,28 @@ def manual_update():
         change_percent = f"Call Change OI is higher by {((abs(call_oi) - abs(put_oi)) / abs(put_oi) * 100):.2f}%" if put_oi else "0%"
         trend = "Bearish Trend" if float(intraday_pcr) <= 0.8 else "Bullish Trend" if float(intraday_pcr) >= 1.2 else "Neutral Trend"
         
-        # Row with correct differences
+        # Row with COI PCR in Column G
         new_row = [
             timestamp, 
             f"{put_oi:,}",           # B - Current Intraday Put Change OI
             put_difference,           # C - Difference from previous B
             f"{call_oi:,}",           # D - Current Intraday Call Change OI
             call_difference,           # E - Difference from previous D
-            change_percent, 
-            intraday_pcr, 
-            "0.00", 
-            trend,
-            f"PCR {intraday_pcr} indicates {trend.lower()}.",
-            f"{total_put_oi:,}",      # K - Total Put OI
-            f"{total_call_oi:,}",     # L - Total Call OI
-            overall_pcr,              # M - Overall PCR
-            crudeoil_price,           # N - CrudeOil Price
-            crudeoil_change,          # O - CrudeOil Change
-            f"{crudeoil_percent_change}%",  # P - CrudeOil % Change
-            day_high,                  # Q - Day High
-            day_low                    # R - Day Low
+            change_percent,            # F - Change percent text
+            coi_pcr,                   # G - 🔥 COI PCR
+            trend,                     # H - Trend
+            f"PCR {intraday_pcr} indicates {trend.lower()}.",  # I - Description
+            f"{total_put_oi:,}",      # J - Total Put OI
+            f"{total_call_oi:,}",     # K - Total Call OI
+            overall_pcr,               # L - Overall PCR
+            crudeoil_price,            # M - CrudeOil Price
+            crudeoil_change,           # N - CrudeOil Change
+            f"{crudeoil_percent_change}%",  # O - CrudeOil % Change
+            day_high,                  # P - Day High
+            day_low                    # Q - Day Low
         ]
         
-        print(f"📝 Manual update at row {empty_row}: B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}")
+        print(f"📝 Manual update at row {empty_row}: G={coi_pcr}")
         
         for col, value in enumerate(new_row, start=1):
             sheet.update_cell(empty_row, col, value)
@@ -599,13 +625,13 @@ def manual_update():
         last_written_row = empty_row
         
         update_in_progress = False
-        return f"✅ Manual Update Successful at row {empty_row}: {timestamp}"
+        return f"✅ Manual Update Successful at row {empty_row}: COI PCR = {coi_pcr}"
         
     except Exception as e:
         update_in_progress = False
         return f"❌ Error: {e}"
 
-# 🔥 NEW: Manual Reset Route (for testing)
+# Manual Reset Route
 @app.route('/reset-now')
 def manual_reset():
     """Manually trigger sheet reset (for testing)"""
@@ -634,7 +660,7 @@ def manual_reset():
     except Exception as e:
         return f"❌ Reset Error: {e}"
 
-print("🎉 Starting PCR Auto-Updater with Daily Reset...")
+print("🎉 Starting PCR Auto-Updater with Daily Reset and COI PCR...")
 
 # Start all jobs
 background_thread = threading.Thread(target=pcr_background_job, daemon=True)
@@ -643,13 +669,13 @@ background_thread.start()
 keep_alive_thread = threading.Thread(target=keep_alive_job, daemon=True)
 keep_alive_thread.start()
 
-# 🔥 NEW: Start daily reset job
 reset_thread = threading.Thread(target=daily_reset_job, daemon=True)
 reset_thread.start()
 
 print("✅ All jobs started successfully!")
 print("⏰ Daily Reset scheduled at 8:58 AM IST")
 print("📊 Live Data: 9:00 AM to 11:30 PM IST")
+print("📈 COI PCR now in Column G")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
