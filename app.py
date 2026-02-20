@@ -20,6 +20,9 @@ update_in_progress = False
 previous_intraday_put_oi = None
 previous_intraday_call_oi = None
 
+# Also track the last row we wrote to
+last_written_row = None
+
 def extract_day_high_low(all_text):
     """Extract Day High and Day Low from website text"""
     try:
@@ -120,32 +123,36 @@ def extract_day_high_low(all_text):
         print(f"❌ Error extracting Day High/Low: {e}")
         return "0", "0"
 
-# NEW: Get previous Intraday values from columns B and D
-def get_previous_intraday_values(sheet):
-    """Get previous Intraday Put and Call OI values from last row"""
-    global previous_intraday_put_oi, previous_intraday_call_oi
+# FIXED: Get previous Intraday values from the LAST WRITTEN ROW
+def get_previous_intraday_values(sheet, current_empty_row):
+    """Get previous Intraday Put and Call OI values from the previous row"""
+    global previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
     
     try:
-        # Get all values in column B (Intraday Put Change OI) and column D (Intraday Call Change OI)
-        put_values = sheet.col_values(2)  # Column B
-        call_values = sheet.col_values(4)  # Column D
-        
-        # Filter out header and empty rows (start from row 18)
-        if len(put_values) >= 18:
-            # Get the last non-empty value from column B
-            for value in reversed(put_values[17:]):
-                if value and value != '0' and value != '' and value != '0':
-                    # Remove commas and convert to int
-                    previous_intraday_put_oi = int(value.replace(',', ''))
-                    print(f"📊 Previous Intraday Put OI: {previous_intraday_put_oi:,}")
-                    break
+        if current_empty_row > 18:
+            # Previous row is current_empty_row - 1
+            prev_row = current_empty_row - 1
             
-            # Get the last non-empty value from column D
-            for value in reversed(call_values[17:]):
-                if value and value != '0' and value != '' and value != '0':
-                    previous_intraday_call_oi = int(value.replace(',', ''))
-                    print(f"📊 Previous Intraday Call OI: {previous_intraday_call_oi:,}")
-                    break
+            # Get values from previous row's column B and D
+            prev_put_cell = sheet.cell(prev_row, 2)  # Column B
+            prev_call_cell = sheet.cell(prev_row, 4)  # Column D
+            
+            if prev_put_cell.value and prev_put_cell.value != '':
+                # Remove commas and convert to int
+                prev_put_str = prev_put_cell.value.replace(',', '')
+                if prev_put_str.replace('-', '').isdigit():
+                    previous_intraday_put_oi = int(prev_put_str)
+                    print(f"📊 Previous Intraday Put OI (Row {prev_row}): {previous_intraday_put_oi:,}")
+            
+            if prev_call_cell.value and prev_call_cell.value != '':
+                prev_call_str = prev_call_cell.value.replace(',', '')
+                if prev_call_str.replace('-', '').isdigit():
+                    previous_intraday_call_oi = int(prev_call_str)
+                    print(f"📊 Previous Intraday Call OI (Row {prev_row}): {previous_intraday_call_oi:,}")
+        else:
+            print(f"📊 First data row (18), no previous values available")
+            previous_intraday_put_oi = None
+            previous_intraday_call_oi = None
                     
     except Exception as e:
         print(f"⚠️ Error getting previous intraday values: {e}")
@@ -154,7 +161,7 @@ def get_previous_intraday_values(sheet):
 
 def pcr_background_job():
     print("🚀 PCR BACKGROUND JOB STARTED!")
-    global last_update_minute, update_in_progress, previous_intraday_put_oi, previous_intraday_call_oi
+    global last_update_minute, update_in_progress, previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
     
     while True:
         try:
@@ -200,9 +207,15 @@ def pcr_background_job():
             call_match = re.search(r'Call OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
             pcr_match = re.search(r'Intraday PCR\s*([+-]?\d+\.\d+)', all_text)
             
-            put_oi = int(put_match.group(1).replace(',', '')) if put_match else 0
-            call_oi = int(call_match.group(1).replace(',', '')) if call_match else 0
+            # FIXED: Handle negative values properly
+            put_oi_str = put_match.group(1).replace(',', '') if put_match else "0"
+            call_oi_str = call_match.group(1).replace(',', '') if call_match else "0"
+            
+            put_oi = int(put_oi_str)
+            call_oi = int(call_oi_str)
             intraday_pcr = pcr_match.group(1) if pcr_match else "0"
+            
+            print(f"✅ Raw Intraday Data - Put: {put_oi_str}, Call: {call_oi_str}, PCR: {intraday_pcr}")
             
             # Total OI data extraction
             total_put_oi = 0
@@ -262,33 +275,12 @@ def pcr_background_job():
             
             day_high, day_low = extract_day_high_low(all_text)
             
-            print(f"✅ Intraday Data - Put: {put_oi}, Call: {call_oi}, PCR: {intraday_pcr}")
+            print(f"✅ Intraday Data - Put: {put_oi:,}, Call: {call_oi:,}, PCR: {intraday_pcr}")
             print(f"📈 Total OI Data - Put: {total_put_oi:,}, Call: {total_call_oi:,}, PCR: {overall_pcr}")
             
             creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
             gc = gspread.service_account_from_dict(creds_json)
             sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
-            
-            # Get previous intraday values for difference calculation
-            get_previous_intraday_values(sheet)
-            
-            # Calculate differences using Intraday values (B and D columns)
-            put_difference = "0"
-            call_difference = "0"
-            
-            if previous_intraday_put_oi is not None:
-                put_diff_value = put_oi - previous_intraday_put_oi
-                put_difference = f"{put_diff_value:+,}".replace('+-', '-')
-                print(f"📊 Put OI Difference (B{empty_row if 'empty_row' in locals() else '?'} - Previous): {put_oi} - {previous_intraday_put_oi} = {put_difference}")
-            else:
-                print("⚠️ No previous Intraday Put OI value found, setting difference to 0")
-            
-            if previous_intraday_call_oi is not None:
-                call_diff_value = call_oi - previous_intraday_call_oi
-                call_difference = f"{call_diff_value:+,}".replace('+-', '-')
-                print(f"📊 Call OI Difference (D{empty_row if 'empty_row' in locals() else '?'} - Previous): {call_oi} - {previous_intraday_call_oi} = {call_difference}")
-            else:
-                print("⚠️ No previous Intraday Call OI value found, setting difference to 0")
             
             # Find empty row
             data_range = sheet.range('A18:A2000')
@@ -303,6 +295,27 @@ def pcr_background_job():
             if empty_row is None:
                 empty_row = len(sheet.col_values(1)) + 1
                 print(f"📍 No empty rows found, appending to row: {empty_row}")
+            
+            # FIXED: Get previous values from the previous row (not from memory)
+            get_previous_intraday_values(sheet, empty_row)
+            
+            # Calculate differences using previous row's values
+            put_difference = "0"
+            call_difference = "0"
+            
+            if previous_intraday_put_oi is not None:
+                put_diff_value = put_oi - previous_intraday_put_oi
+                put_difference = f"{put_diff_value:+,}".replace('+-', '-')
+                print(f"📊 Put OI Difference: {put_oi:,} - {previous_intraday_put_oi:,} = {put_difference}")
+            else:
+                print("⚠️ No previous Intraday Put OI value found, setting difference to 0")
+            
+            if previous_intraday_call_oi is not None:
+                call_diff_value = call_oi - previous_intraday_call_oi
+                call_difference = f"{call_diff_value:+,}".replace('+-', '-')
+                print(f"📊 Call OI Difference: {call_oi:,} - {previous_intraday_call_oi:,} = {call_difference}")
+            else:
+                print("⚠️ No previous Intraday Call OI value found, setting difference to 0")
             
             exact_minute_time = current_time.replace(second=0, microsecond=0)
             timestamp = exact_minute_time.strftime("%Y-%m-%d %H:%M:%S IST")
@@ -333,16 +346,16 @@ def pcr_background_job():
             ]
             
             print(f"📝 Adding data to row {empty_row}: {timestamp}")
+            print(f"📝 Row data: B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}")
             
+            # Update all columns
             for col, value in enumerate(new_row, start=1):
                 sheet.update_cell(empty_row, col, value)
             
             print(f"✅ AUTO-UPDATED SUCCESSFULLY at row {empty_row}!")
             
-            # Update previous intraday values for next iteration
-            previous_intraday_put_oi = put_oi
-            previous_intraday_call_oi = call_oi
-            print(f"📊 Updated previous values - Put: {previous_intraday_put_oi:,}, Call: {previous_intraday_call_oi:,}")
+            # Store the last written row
+            last_written_row = empty_row
             
             last_update_minute = current_minute
             update_in_progress = False
@@ -375,7 +388,7 @@ def home():
 
 @app.route('/update')
 def manual_update():
-    global update_in_progress, previous_intraday_put_oi, previous_intraday_call_oi
+    global update_in_progress, previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
     try:
         if update_in_progress:
             return "⚠️ Update already in progress, please wait..."
@@ -398,8 +411,11 @@ def manual_update():
         call_match = re.search(r'Call OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
         pcr_match = re.search(r'Intraday PCR\s*([+-]?\d+\.\d+)', all_text)
         
-        put_oi = int(put_match.group(1).replace(',', '')) if put_match else 0
-        call_oi = int(call_match.group(1).replace(',', '')) if call_match else 0
+        put_oi_str = put_match.group(1).replace(',', '') if put_match else "0"
+        call_oi_str = call_match.group(1).replace(',', '') if call_match else "0"
+        
+        put_oi = int(put_oi_str)
+        call_oi = int(call_oi_str)
         intraday_pcr = pcr_match.group(1) if pcr_match else "0"
         
         # Total OI data
@@ -445,27 +461,6 @@ def manual_update():
         gc = gspread.service_account_from_dict(creds_json)
         sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
         
-        # Get previous intraday values
-        get_previous_intraday_values(sheet)
-        
-        # Calculate differences using Intraday values
-        put_difference = "0"
-        call_difference = "0"
-        
-        if previous_intraday_put_oi is not None:
-            put_diff_value = put_oi - previous_intraday_put_oi
-            put_difference = f"{put_diff_value:+,}".replace('+-', '-')
-            print(f"📊 Put OI Difference: {put_oi} - {previous_intraday_put_oi} = {put_difference}")
-        else:
-            print("⚠️ No previous Intraday Put OI value found")
-        
-        if previous_intraday_call_oi is not None:
-            call_diff_value = call_oi - previous_intraday_call_oi
-            call_difference = f"{call_diff_value:+,}".replace('+-', '-')
-            print(f"📊 Call OI Difference: {call_oi} - {previous_intraday_call_oi} = {call_difference}")
-        else:
-            print("⚠️ No previous Intraday Call OI value found")
-        
         # Find empty row
         data_range = sheet.range('A18:A5000')
         empty_row = None
@@ -477,6 +472,27 @@ def manual_update():
         
         if empty_row is None:
             empty_row = len(sheet.col_values(1)) + 1
+        
+        # FIXED: Get previous values from the previous row
+        get_previous_intraday_values(sheet, empty_row)
+        
+        # Calculate differences using previous row's values
+        put_difference = "0"
+        call_difference = "0"
+        
+        if previous_intraday_put_oi is not None:
+            put_diff_value = put_oi - previous_intraday_put_oi
+            put_difference = f"{put_diff_value:+,}".replace('+-', '-')
+            print(f"📊 Put OI Difference: {put_oi:,} - {previous_intraday_put_oi:,} = {put_difference}")
+        else:
+            print("⚠️ No previous Intraday Put OI value found")
+        
+        if previous_intraday_call_oi is not None:
+            call_diff_value = call_oi - previous_intraday_call_oi
+            call_difference = f"{call_diff_value:+,}".replace('+-', '-')
+            print(f"📊 Call OI Difference: {call_oi:,} - {previous_intraday_call_oi:,} = {call_difference}")
+        else:
+            print("⚠️ No previous Intraday Call OI value found")
         
         exact_minute_time = current_time.replace(second=0, microsecond=0)
         timestamp = exact_minute_time.strftime("%Y-%m-%d %H:%M:%S IST")
@@ -506,12 +522,13 @@ def manual_update():
             day_low                    # R - Day Low
         ]
         
+        print(f"📝 Manual update at row {empty_row}: B={put_oi:,}, C={put_difference}, D={call_oi:,}, E={call_difference}")
+        
         for col, value in enumerate(new_row, start=1):
             sheet.update_cell(empty_row, col, value)
         
-        # Update previous values
-        previous_intraday_put_oi = put_oi
-        previous_intraday_call_oi = call_oi
+        # Store last written row
+        last_written_row = empty_row
         
         update_in_progress = False
         return f"✅ Manual Update Successful at row {empty_row}: {timestamp}"
