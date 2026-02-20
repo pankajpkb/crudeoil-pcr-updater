@@ -5,7 +5,7 @@ import re
 import gspread
 import json
 import os
-from datetime import datetime
+from datetime import datetime, time as dtime
 import time
 import threading
 import pytz
@@ -22,6 +22,9 @@ previous_intraday_call_oi = None
 
 # Also track the last row we wrote to
 last_written_row = None
+
+# 🔥 NEW: Track if today's reset has been done
+reset_done_today = False
 
 def extract_day_high_low(all_text):
     """Extract Day High and Day Low from website text"""
@@ -123,7 +126,71 @@ def extract_day_high_low(all_text):
         print(f"❌ Error extracting Day High/Low: {e}")
         return "0", "0"
 
-# FIXED: Get previous Intraday values from the LAST WRITTEN ROW
+# 🔥 NEW: Daily Reset Function
+def daily_reset_job():
+    """Check daily at 8:58 AM and clear the sheet data"""
+    global reset_done_today, previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
+    
+    print("🔄 Daily Reset Job Started!")
+    
+    while True:
+        try:
+            # IST timezone
+            ist = pytz.timezone('Asia/Kolkata')
+            current_time = datetime.now(ist)
+            current_hour = current_time.hour
+            current_minute = current_time.minute
+            
+            # Check if it's 8:58 AM
+            if current_hour == 8 and current_minute == 58:
+                # Check if reset already done today
+                if not reset_done_today:
+                    print(f"🗓️ Daily Reset Triggered at {current_time.strftime('%Y-%m-%d %H:%M:%S')} IST")
+                    
+                    try:
+                        # Connect to Google Sheets
+                        creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+                        gc = gspread.service_account_from_dict(creds_json)
+                        sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
+                        
+                        # Clear data from A18 to R3000
+                        print("🧹 Clearing data from A18:R3000...")
+                        
+                        # Method 1: Clear cell by cell (more reliable)
+                        cell_range = sheet.range('A18:R3000')
+                        for cell in cell_range:
+                            cell.value = ''
+                        sheet.update_cells(cell_range)
+                        
+                        print(f"✅ Daily Reset Complete! Cleared {len(cell_range)} cells")
+                        
+                        # Reset global variables for new day
+                        previous_intraday_put_oi = None
+                        previous_intraday_call_oi = None
+                        last_written_row = None
+                        reset_done_today = True
+                        
+                        print("📊 Previous values reset for new trading day")
+                        
+                    except Exception as e:
+                        print(f"❌ Daily Reset Error: {e}")
+                
+                # Wait for 2 minutes to avoid multiple resets
+                time.sleep(120)
+            
+            # Reset the flag at midnight (12:00 AM) for next day
+            elif current_hour == 0 and current_minute == 0:
+                reset_done_today = False
+                print("🔄 Reset flag cleared for new day")
+                time.sleep(60)
+            
+            # Check every 30 seconds
+            time.sleep(30)
+            
+        except Exception as e:
+            print(f"❌ Daily Reset Job Error: {e}")
+            time.sleep(30)
+
 def get_previous_intraday_values(sheet, current_empty_row):
     """Get previous Intraday Put and Call OI values from the previous row"""
     global previous_intraday_put_oi, previous_intraday_call_oi, last_written_row
@@ -175,6 +242,7 @@ def pcr_background_job():
             current_minute = current_time.minute
             current_second = current_time.second
             
+            # Only run between 9 AM to 11:30 PM IST
             if not (9 <= current_hour < 23 or (current_hour == 23 and current_minute <= 30)):
                 if last_update_minute != -2:
                     print(f"⏸️ Outside market hours: {current_hour}:{current_minute:02d} IST")
@@ -182,6 +250,7 @@ def pcr_background_job():
                 time.sleep(30)
                 continue
             
+            # Update only once per minute (at second 0-5)
             if current_second > 5 or current_minute == last_update_minute:
                 sleep_time = 60 - current_second
                 if sleep_time > 5:
@@ -207,7 +276,6 @@ def pcr_background_job():
             call_match = re.search(r'Call OI Chg\s*([+-]?\d{1,3}(?:,\d{3})*)', all_text)
             pcr_match = re.search(r'Intraday PCR\s*([+-]?\d+\.\d+)', all_text)
             
-            # FIXED: Handle negative values properly
             put_oi_str = put_match.group(1).replace(',', '') if put_match else "0"
             call_oi_str = call_match.group(1).replace(',', '') if call_match else "0"
             
@@ -296,7 +364,7 @@ def pcr_background_job():
                 empty_row = len(sheet.col_values(1)) + 1
                 print(f"📍 No empty rows found, appending to row: {empty_row}")
             
-            # FIXED: Get previous values from the previous row (not from memory)
+            # Get previous values from the previous row
             get_previous_intraday_values(sheet, empty_row)
             
             # Calculate differences using previous row's values
@@ -327,9 +395,9 @@ def pcr_background_job():
             new_row = [
                 timestamp, 
                 f"{put_oi:,}",           # B - Current Intraday Put Change OI
-                put_difference,           # C - Difference from previous B (current - previous)
+                put_difference,           # C - Difference from previous B
                 f"{call_oi:,}",           # D - Current Intraday Call Change OI
-                call_difference,           # E - Difference from previous D (current - previous)
+                call_difference,           # E - Difference from previous D
                 change_percent, 
                 intraday_pcr, 
                 "0.00", 
@@ -384,7 +452,7 @@ def keep_alive_job():
 
 @app.route('/')
 def home():
-    return "PCR Auto-Updater Running - 9 AM to 11:30 PM IST (Exactly Every Minute)"
+    return "PCR Auto-Updater Running - Daily Reset at 8:58 AM | Live Data 9 AM to 11:30 PM IST"
 
 @app.route('/update')
 def manual_update():
@@ -473,7 +541,7 @@ def manual_update():
         if empty_row is None:
             empty_row = len(sheet.col_values(1)) + 1
         
-        # FIXED: Get previous values from the previous row
+        # Get previous values from the previous row
         get_previous_intraday_values(sheet, empty_row)
         
         # Calculate differences using previous row's values
@@ -537,14 +605,51 @@ def manual_update():
         update_in_progress = False
         return f"❌ Error: {e}"
 
-print("🎉 Starting PCR Auto-Updater...")
+# 🔥 NEW: Manual Reset Route (for testing)
+@app.route('/reset-now')
+def manual_reset():
+    """Manually trigger sheet reset (for testing)"""
+    try:
+        print("🧹 Manual Reset Triggered!")
+        
+        creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+        gc = gspread.service_account_from_dict(creds_json)
+        sheet = gc.open("CrudeOil_PCR_Live_Data").worksheet("PCR_Data_Live")
+        
+        # Clear data from A18 to R3000
+        cell_range = sheet.range('A18:R3000')
+        for cell in cell_range:
+            cell.value = ''
+        sheet.update_cells(cell_range)
+        
+        # Reset global variables
+        global previous_intraday_put_oi, previous_intraday_call_oi, last_written_row, reset_done_today
+        previous_intraday_put_oi = None
+        previous_intraday_call_oi = None
+        last_written_row = None
+        reset_done_today = True
+        
+        return f"✅ Manual Reset Complete! Cleared {len(cell_range)} cells"
+        
+    except Exception as e:
+        return f"❌ Reset Error: {e}"
+
+print("🎉 Starting PCR Auto-Updater with Daily Reset...")
+
+# Start all jobs
 background_thread = threading.Thread(target=pcr_background_job, daemon=True)
 background_thread.start()
 
 keep_alive_thread = threading.Thread(target=keep_alive_job, daemon=True)
 keep_alive_thread.start()
 
-print("✅ Both jobs started successfully!")
+# 🔥 NEW: Start daily reset job
+reset_thread = threading.Thread(target=daily_reset_job, daemon=True)
+reset_thread.start()
+
+print("✅ All jobs started successfully!")
+print("⏰ Daily Reset scheduled at 8:58 AM IST")
+print("📊 Live Data: 9:00 AM to 11:30 PM IST")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
